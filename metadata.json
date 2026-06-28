@@ -1,0 +1,6 @@
+{
+  "name": "Project Omni",
+  "description": "A production-grade AI-powered application building platform for generating, editing, and deploying full-stack web applications.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

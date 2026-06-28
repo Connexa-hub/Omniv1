@@ -1,0 +1,104 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // -------------------------------------------------------------------------
+    // GLOBALS
+    // -------------------------------------------------------------------------
+    
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    // -------------------------------------------------------------------------
+    // ENTITY VALIDATIONS
+    // -------------------------------------------------------------------------
+
+    function isValidUser(data) {
+      return data.keys().hasAll(['email', 'displayName', 'isBlocked', 'createdAt']) &&
+             data.email is string && data.email.size() <= 256 &&
+             data.displayName is string && data.displayName.size() <= 128 &&
+             data.isBlocked is bool &&
+             data.createdAt is timestamp;
+    }
+
+    function isValidChat(data) {
+      return data.keys().hasAll(['userId', 'title', 'messages', 'lastModified']) &&
+             data.userId == request.auth.uid &&
+             data.title is string && data.title.size() <= 500 &&
+             data.messages is list && data.messages.size() <= 1000 &&
+             data.lastModified is timestamp;
+    }
+
+    function isValidProject(data) {
+      return data.keys().hasAll(['userId', 'name', 'description', 'files', 'createdAt']) &&
+             data.userId == request.auth.uid &&
+             data.name is string && data.name.size() <= 128 &&
+             data.description is string && data.description.size() <= 1000 &&
+             data.files is list && data.files.size() <= 100 &&
+             data.createdAt is timestamp;
+    }
+
+    function isValidBlockedEmail(data) {
+      return data.keys().hasAll(['email', 'blockedAt', 'reason']) &&
+             data.email is string && data.email.size() <= 256 &&
+             data.blockedAt is timestamp &&
+             data.reason is string && data.reason.size() <= 500;
+    }
+
+    // -------------------------------------------------------------------------
+    // MATCH BLOCKS
+    // -------------------------------------------------------------------------
+
+    // Default deny
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Users
+    match /users/{userId} {
+      allow get: if isSignedIn();
+      allow list: if isSignedIn() && resource.data.isBlocked == false;
+      allow create: if isSignedIn() && isOwner(userId) && isValidUser(request.resource.data);
+      allow update: if isSignedIn() && isOwner(userId) && isValidUser(request.resource.data) &&
+                      request.resource.data.email == resource.data.email &&
+                      request.resource.data.createdAt == resource.data.createdAt;
+    }
+
+    // Chats
+    match /chats/{chatId} {
+      allow list: if isSignedIn() && resource.data.userId == request.auth.uid;
+      allow get: if isSignedIn() && resource.data.userId == request.auth.uid;
+      allow create: if isSignedIn() && isValidChat(request.resource.data);
+      allow update: if isSignedIn() && resource.data.userId == request.auth.uid && isValidChat(request.resource.data);
+      allow delete: if isSignedIn() && resource.data.userId == request.auth.uid;
+    }
+
+    // Projects
+    match /projects/{projectId} {
+      allow list: if isSignedIn() && resource.data.userId == request.auth.uid;
+      allow get: if isSignedIn() && resource.data.userId == request.auth.uid;
+      allow create: if isSignedIn() && isValidProject(request.resource.data);
+      allow update: if isSignedIn() && resource.data.userId == request.auth.uid && isValidProject(request.resource.data);
+      allow delete: if isSignedIn() && resource.data.userId == request.auth.uid;
+    }
+
+    // Blocked Emails
+    match /blocked_emails/{docId} {
+      allow list: if true; // Needed for checking if an email is blocked during signup
+      allow create: if isSignedIn() && request.resource.data.email == request.auth.token.email && isValidBlockedEmail(request.resource.data);
+    }
+
+    // Test connection
+    match /test/connection {
+      allow read: if true;
+    }
+  }
+}

@@ -1,0 +1,9 @@
+{
+  "firestore": [
+    {
+      "target": "omni-db",
+      "database": "ai-studio-projectomni-eb6cea37-6418-4894-8b3c-83cf8594705a",
+      "rules": "firestore.rules"
+    }
+  ]
+}

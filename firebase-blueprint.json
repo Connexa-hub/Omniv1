@@ -1,0 +1,76 @@
+{
+  "collections": {
+    "users": {
+      "documents": {
+        "userId": {
+          "fields": {
+            "email": "string",
+            "displayName": "string",
+            "photoURL": "string",
+            "isBlocked": "boolean",
+            "createdAt": "timestamp",
+            "authProvider": "string"
+          }
+        }
+      }
+    },
+    "chats": {
+      "documents": {
+        "chatId": {
+          "fields": {
+            "userId": "string",
+            "title": "string",
+            "messages": "array",
+            "lastModified": "timestamp"
+          }
+        }
+      }
+    },
+    "projects": {
+      "documents": {
+        "projectId": {
+          "fields": {
+            "userId": "string",
+            "name": "string",
+            "description": "string",
+            "files": "array",
+            "createdAt": "timestamp"
+          }
+        }
+      }
+    },
+    "blocked_emails": {
+      "documents": {
+        "docId": {
+          "fields": {
+            "email": "string",
+            "blockedAt": "timestamp",
+            "reason": "string"
+          }
+        }
+      }
+    },
+    "agents": {
+      "documents": {
+        "agentId": {
+          "fields": {
+            "name": "string",
+            "mode": "string",
+            "description": "string",
+            "capabilities": "array",
+            "status": "string"
+          }
+        }
+      }
+    },
+    "test": {
+      "documents": {
+        "connection": {
+          "fields": {
+            "status": "string"
+          }
+        }
+      }
+    }
+  }
+}
