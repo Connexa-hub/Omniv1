@@ -374,9 +374,10 @@ export default function App() {
   const fetchFiles = useCallback(async () => {
     try {
       const res = await fetch(`/api/files${activeProject ? `?projectId=${activeProject.id}` : ''}`);
+      if (!res.ok) throw new Error(`HTTP error! status: ${res.status}`);
       const data = await res.json();
       setProject(prev => ({ ...prev, files: data }));
-    } catch (e) {
+    } catch (e: any) {
       console.error("Failed to fetch files", e);
     }
   }, [activeProject]);
@@ -481,6 +482,7 @@ export default function App() {
       const fetchStatus = async () => {
         try {
           const res = await fetch('/api/system/status');
+          if (!res.ok) throw new Error(`HTTP error! status: ${res.status}`);
           const data = await res.json();
           setSystemStatus(data);
         } catch (e) {

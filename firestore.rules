@@ -90,6 +90,12 @@ service cloud.firestore {
       allow delete: if isSignedIn() && resource.data.userId == request.auth.uid;
     }
 
+    // Agents
+    match /agents/{agentId} {
+      allow read: if true;
+      allow write: if isSignedIn();
+    }
+
     // Blocked Emails
     match /blocked_emails/{docId} {
       allow list: if true; // Needed for checking if an email is blocked during signup
