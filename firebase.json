@@ -1,9 +1,6 @@
 {
-  "firestore": [
-    {
-      "target": "omni-db",
-      "database": "ai-studio-projectomni-eb6cea37-6418-4894-8b3c-83cf8594705a",
-      "rules": "firestore.rules"
-    }
-  ]
+  "firestore": {
+    "database": "ai-studio-projectomni-4165d291-062d-4aff-987b-ca64dbf70ed3",
+    "rules": "firestore.rules"
+  }
 }

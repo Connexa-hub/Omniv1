@@ -7,7 +7,7 @@ export interface ThinkingStep {
   type: 'thinking' | 'writing' | 'testing' | 'handoff';
   label: string;
   detail?: string;
-  status: 'pending' | 'running' | 'completed' | 'error';
+  status: 'pending' | 'running' | 'completed' | 'error' | 'failed';
 }
 
 export interface Message {
@@ -22,6 +22,10 @@ export interface Message {
   providerName?: string;   // display name (e.g. "Gemini 2.0 Flash", "Claude 3.5 Sonnet")
   providerPlatform?: string; // platform (e.g. "Google", "Anthropic", "OpenAI", "Groq")
   mode?: string;           // which mode was used (e.g. "fast", "thinking", "search", "research")
+  latency?: number;        // response time in ms
+  byok?: boolean;          // whether responded via BYOK key
+  feedback?: 'up' | 'down';
+  error?: string;          // error message if failed
 }
 
 export type AIMode = 'fast' | 'thinking' | 'agent' | 'search' | 'deep_research' | 'plan' | 'research' | 'learn' | 'study';
@@ -69,7 +73,7 @@ export interface ProjectState {
   files: FileNode[];
   activeFile?: string;
   messages: Message[];
-  status: 'idle' | 'generating' | 'building' | 'error' | 'initializing';
+  status: 'idle' | 'generating' | 'executing' | 'building' | 'error' | 'initializing';
   lastBuildAt?: number;
 }
 

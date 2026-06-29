@@ -40,7 +40,8 @@ import {
   Sliders,
   KeyRound,
   MoreVertical,
-  Copy
+  Copy,
+  ExternalLink
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Message, FileNode, ProjectState, Project } from './types';
@@ -53,6 +54,7 @@ import Onboarding from './components/Onboarding';
 import OmniWave from './components/OmniWave';
 import TextbookMessageContent from './components/TextbookMessageContent';
 import { ErrorModal, ErrorType } from './components/ErrorModal';
+import CollapsibleStepsContainer from './components/CollapsibleStepsContainer';
 import { auth, db, handleFirestoreError, OperationType } from './lib/firebase';
 import { signOut, deleteUser } from 'firebase/auth';
 import { doc, updateDoc, collection, query, where, getDocs, addDoc, orderBy, limit, deleteDoc } from 'firebase/firestore';
@@ -130,10 +132,15 @@ export default function App() {
   useEffect(() => {
     chatIdRef.current = currentChatId;
   }, [currentChatId]);
+
+  useEffect(() => {
+    messagesRef.current = project.messages;
+  }, [project.messages]);
   const [chatInput, setChatInput] = useState('');
   const [aiMode, setAiMode] = useState<'agent' | 'learning' | 'study'>('learning');
   const [systemStatus, setSystemStatus] = useState<any>(null);
   const [chatHistory, setChatHistory] = useState<any[]>([]);
+  const [historyError, setHistoryError] = useState(false);
   const [messageFeedbacks, setMessageFeedbacks] = useState<Record<string, 'up' | 'down'>>({});
   const [selectedModel, setSelectedModel] = useState('omni-google');
   const [isChatExpanded, setIsChatExpanded] = useState(false);
@@ -145,10 +152,13 @@ export default function App() {
   ]);
   const [commandRunning, setCommandRunning] = useState(false);
   const terminalEndRef = useRef<HTMLDivElement | null>(null);
+  const chatContainerRef = useRef<HTMLDivElement | null>(null);
+  const chatEndRef = useRef<HTMLDivElement | null>(null);
 
   // File editor states and terminal input refs
   const [isSavingFile, setIsSavingFile] = useState(false);
   const [saveSuccess, setSaveSuccess] = useState(false);
+  const inputRef = useRef<HTMLTextAreaElement | null>(null);
   const terminalInputRef = useRef<HTMLInputElement | null>(null);
   const mobileTerminalInputRef = useRef<HTMLInputElement | null>(null);
 
@@ -202,9 +212,8 @@ export default function App() {
 
   const getModelDisplayName = (modelId: string): string => {
     const map: Record<string, string> = {
-      'gemini-2.0-flash': 'Gemini 2.0 Flash',
-      'gemini-2.0-flash-exp': 'Gemini 2.0 Flash',
-      'gemini-1.5-pro': 'Gemini 1.5 Pro',
+      'gemini-3.5-flash': 'Gemini 3.5 Flash',
+      'gemini-3.1-pro-preview': 'Gemini 3.1 Pro',
       'claude-3-5-sonnet-20241022': 'Claude 3.5 Sonnet',
       'claude-opus-4-5': 'Claude Opus 4',
       'gpt-4o': 'GPT-4o',
@@ -269,8 +278,64 @@ export default function App() {
   const [editingPlatform, setEditingPlatform] = useState<string | null>(null);
   const [editingApiKey, setEditingApiKey] = useState('');
   const [savingKey, setSavingKey] = useState(false);
+
+  // Multi-Provider AI Mesh States
+  const [meshStatuses, setMeshStatuses] = useState<any[]>([]);
+  const [routingConfig, setRoutingConfig] = useState<any>({
+    preferredProviderId: null,
+    priorityMode: 'balanced',
+    autoFailover: true,
+    autoHealthCheck: true
+  });
+  const [providerSearch, setProviderSearch] = useState('');
+  const [testingKeyId, setTestingKeyId] = useState<string | null>(null);
+  const [testResult, setTestResult] = useState<any>(null);
+  const [savingConfig, setSavingConfig] = useState(false);
+  const [editingProviderId, setEditingProviderId] = useState<string | null>(null);
+  const [providerApiKey, setProviderApiKey] = useState('');
+  const [providerPriority, setProviderPriority] = useState(5);
+  const [tempApiKeys, setTempApiKeys] = useState<string[]>([]);
+  const [cloudflareAccountIdInput, setCloudflareAccountIdInput] = useState('');
+  const [huggingFaceModelIdInput, setHuggingFaceModelIdInput] = useState('');
+
+  const fetchMeshStatus = useCallback(async () => {
+    try {
+      const res = await fetch(`/api/provider/status?userId=${user?.uid || ''}`);
+      const data = await res.json();
+      if (data.success && data.providers) {
+        setMeshStatuses(data.providers);
+      }
+    } catch (e) {
+      console.error("Failed to fetch provider status:", e);
+    }
+  }, [user]);
+
+  const fetchRoutingConfig = useCallback(async () => {
+    try {
+      const res = await fetch(`/api/provider/config?userId=${user?.uid || ''}`);
+      const data = await res.json();
+      if (data.success && data.config) {
+        setRoutingConfig(data.config);
+      }
+    } catch (e) {
+      console.error("Failed to fetch routing config:", e);
+    }
+  }, [user]);
+
+  useEffect(() => {
+    if (isAgentsOpen) {
+      fetchMeshStatus();
+      fetchRoutingConfig();
+    }
+  }, [isAgentsOpen, fetchMeshStatus, fetchRoutingConfig]);
   
   const [openModelMenu, setOpenModelMenu] = useState<string | null>(null);
+
+  const [isDeployModalOpen, setIsDeployModalOpen] = useState(false);
+  const [deployPlatform, setDeployPlatform] = useState<'vercel' | 'netlify' | null>(null);
+  const [deployToken, setDeployToken] = useState('');
+  const [isDeploying, setIsDeploying] = useState(false);
+  const [deployResult, setDeployResult] = useState<{url: string; platform: string} | null>(null);
 
   const TEMPLATES = [
     { id: 'blank', name: 'Blank Canvas', desc: 'Start from scratch with a clean slate', tech: ['Any Stack'], gradient: 'from-slate-700 to-slate-900', icon: '⬜' },
@@ -284,27 +349,27 @@ export default function App() {
   const AI_PLATFORMS = [
     { 
       id: 'google', name: 'Google AI Studio', icon: '🔵', color: 'blue',
-      models: ['gemini-2.0-flash', 'gemini-1.5-pro', 'gemini-1.5-flash'],
+      models: ['gemini-3.5-flash', 'gemini-3.1-pro-preview'],
       keyPlaceholder: 'AIzaSy...', keyHint: 'Get at aistudio.google.com/apikey',
       modelId: 'omni-google'
     },
     { 
-      id: 'openai', name: 'OpenAI', icon: '⚫', color: 'slate',
-      models: ['gpt-4o', 'gpt-4o-mini', 'gpt-4-turbo'],
-      keyPlaceholder: 'sk-...', keyHint: 'Get at platform.openai.com/api-keys',
-      modelId: 'omni-openai'
-    },
-    { 
-      id: 'anthropic', name: 'Anthropic', icon: '🟤', color: 'orange',
-      models: ['claude-opus-4-5', 'claude-sonnet-4-5', 'claude-haiku-4-5'],
-      keyPlaceholder: 'sk-ant-...', keyHint: 'Get at console.anthropic.com/settings/keys',
-      modelId: 'omni-anthropic'
-    },
-    { 
       id: 'groq', name: 'Groq', icon: '🟠', color: 'amber',
-      models: ['llama-3.3-70b-versatile', 'mixtral-8x7b-32768', 'gemma2-9b-it'],
+      models: ['llama-3.3-70b-versatile', 'llama-3.1-8b-instant', 'mixtral-8x7b-32768'],
       keyPlaceholder: 'gsk_...', keyHint: 'Get free at console.groq.com/keys',
       modelId: 'omni-groq'
+    },
+    { 
+      id: 'openrouter', name: 'OpenRouter', icon: '🟢', color: 'green',
+      models: ['google/gemini-2.0-flash-001', 'anthropic/claude-3.5-sonnet', 'meta-llama/llama-3.1-70b-instruct'],
+      keyPlaceholder: 'sk-or-...', keyHint: 'Get at openrouter.ai/keys (free tier available)',
+      modelId: 'omni-openrouter'
+    },
+    { 
+      id: 'deepseek', name: 'DeepSeek', icon: '🐋', color: 'cyan',
+      models: ['deepseek-chat', 'deepseek-coder'],
+      keyPlaceholder: 'sk-...', keyHint: 'Get at platform.deepseek.com/api_keys',
+      modelId: 'omni-deepseek'
     },
     { 
       id: 'mistral', name: 'Mistral', icon: '🟣', color: 'purple',
@@ -313,23 +378,47 @@ export default function App() {
       modelId: 'omni-mistral'
     },
     { 
-      id: 'openrouter', name: 'OpenRouter', icon: '🟢', color: 'green',
-      models: ['auto', 'meta-llama/llama-3.3-70b', 'deepseek/deepseek-coder'],
-      keyPlaceholder: 'sk-or-...', keyHint: 'Get at openrouter.ai/keys (free tier available)',
-      modelId: 'omni-openrouter'
-    },
-    { 
       id: 'huggingface', name: 'Hugging Face', icon: '🤗', color: 'yellow',
-      models: ['meta-llama/Llama-3.1-70B-Instruct', 'Qwen/Qwen2.5-72B-Instruct'],
+      models: ['google/gemma-2-9b-it', 'mistralai/Mistral-Nemo-Instruct-2407', 'meta-llama/Llama-3.2-11B-Vision-Instruct'],
       keyPlaceholder: 'hf_...', keyHint: 'Get at huggingface.co/settings/tokens',
       modelId: 'omni-huggingface'
     },
     { 
-      id: 'deepseek', name: 'DeepSeek', icon: '🐋', color: 'cyan',
-      models: ['deepseek-chat', 'deepseek-coder'],
-      keyPlaceholder: 'sk-...', keyHint: 'Get at platform.deepseek.com/api_keys',
-      modelId: 'omni-deepseek'
+      id: 'cerebras', name: 'Cerebras', icon: '⚡', color: 'rose',
+      models: ['llama3.1-70b', 'llama3.1-8b'],
+      keyPlaceholder: 'csk-...', keyHint: 'Get at cloud.cerebras.ai',
+      modelId: 'omni-cerebras'
     },
+    { 
+      id: 'github', name: 'GitHub Models', icon: '🐱', color: 'slate',
+      models: ['gpt-4o', 'gpt-4o-mini', 'cohere-command-r-plus'],
+      keyPlaceholder: 'ghp_...', keyHint: 'Get at github.com/marketplace/models',
+      modelId: 'omni-github'
+    },
+    { 
+      id: 'cloudflare', name: 'Cloudflare Workers AI', icon: '☁️', color: 'orange',
+      models: ['@cf/meta/llama-3.1-8b-instruct', '@cf/meta/llama-3.3-70b-instruct'],
+      keyPlaceholder: '...', keyHint: 'Get token at dash.cloudflare.com',
+      modelId: 'omni-cloudflare'
+    },
+    { 
+      id: 'together', name: 'Together AI', icon: '🧬', color: 'teal',
+      models: ['meta-llama/Llama-3.3-70B-Instruct-Turbo', 'mistralai/Mixtral-8x22B-Instruct-v0.1'],
+      keyPlaceholder: '...', keyHint: 'Get key at api.together.xyz',
+      modelId: 'omni-together'
+    },
+    { 
+      id: 'fireworks', name: 'Fireworks AI', icon: '🎆', color: 'indigo',
+      models: ['accounts/fireworks/models/llama-v3p1-70b-instruct', 'accounts/fireworks/models/mixtral-8x22b-instruct'],
+      keyPlaceholder: '...', keyHint: 'Get key at fireworks.ai',
+      modelId: 'omni-fireworks'
+    },
+    { 
+      id: 'nvidia', name: 'NVIDIA Build', icon: '💚', color: 'emerald',
+      models: ['meta/llama-3.1-70b-instruct', 'nvidia/llama-3.1-nemotron-70b-instruct'],
+      keyPlaceholder: 'nvapi-...', keyHint: 'Get key at build.nvidia.com',
+      modelId: 'omni-nvidia'
+    }
   ];
 
   // Mobile layout detection effect
@@ -343,6 +432,36 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // Cmd/Ctrl + Enter = send message
+      if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
+        e.preventDefault();
+        if (chatInput.trim()) handleSendMessage();
+      }
+      // Cmd/Ctrl + K = focus chat input
+      if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
+        e.preventDefault();
+        inputRef.current?.focus();
+      }
+      // Cmd/Ctrl + B = toggle sidebar
+      if ((e.metaKey || e.ctrlKey) && e.key === 'b') {
+        e.preventDefault();
+        setIsSidebarExpanded(prev => !prev);
+      }
+      // Escape = close any open modal
+      if (e.key === 'Escape') {
+        setIsToolsMenuOpen(false);
+        setIsSecretsOpen(false);
+        setIsAgentsOpen(false);
+        setIsConfigureOpen(false);
+        setIsDeployModalOpen(false);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [chatInput]);
+
+  useEffect(() => {
     if (activeProject === null && aiMode === 'agent') {
       setAiMode('learning');
     }
@@ -353,7 +472,7 @@ export default function App() {
     const handleMouseMove = (e: MouseEvent) => {
       if (!isResizing) return;
       const newHeight = window.innerHeight - e.clientY;
-      const clampedHeight = Math.min(window.innerHeight - 120, Math.max(80, newHeight));
+      const clampedHeight = Math.max(80, Math.min(window.innerHeight - 200, newHeight));
       setTerminalHeight(clampedHeight);
     };
 
@@ -371,14 +490,23 @@ export default function App() {
     };
   }, [isResizing]);
 
-  const fetchFiles = useCallback(async () => {
+  const fetchFiles = useCallback(async (retryCount = 0) => {
     try {
+      console.log(`[App] Fetching files (attempt ${retryCount + 1})...`);
       const res = await fetch(`/api/files${activeProject ? `?projectId=${activeProject.id}` : ''}`);
-      if (!res.ok) throw new Error(`HTTP error! status: ${res.status}`);
+      if (!res.ok) {
+        const errorText = await res.text();
+        throw new Error(`HTTP error! status: ${res.status}, body: ${errorText}`);
+      }
       const data = await res.json();
+      console.log(`[App] Successfully fetched ${data.length} files`);
       setProject(prev => ({ ...prev, files: data }));
     } catch (e: any) {
-      console.error("Failed to fetch files", e);
+      console.error("[App] Failed to fetch files", e);
+      if (retryCount < 2) {
+        console.log("[App] Retrying fetchFiles in 2s...");
+        setTimeout(() => fetchFiles(retryCount + 1), 2000);
+      }
     }
   }, [activeProject]);
 
@@ -416,6 +544,7 @@ export default function App() {
         setChatHistory(unique);
       } catch (err) {
         handleFirestoreError(err, OperationType.LIST, "chats");
+        setHistoryError(true);
       }
     }
   }, [user]);
@@ -479,6 +608,8 @@ export default function App() {
       fetchFiles();
       fetchHistory();
       fetchProjects();
+      // Delayed refetch to catch any race conditions
+      const t = setTimeout(() => fetchHistory(), 2000);
       const fetchStatus = async () => {
         try {
           const res = await fetch('/api/system/status');
@@ -491,12 +622,22 @@ export default function App() {
       };
       fetchStatus();
       const interval = setInterval(fetchStatus, 30000);
-      return () => clearInterval(interval);
+      return () => {
+        clearInterval(interval);
+        clearTimeout(t);
+      };
     }
   }, [user, fetchFiles, fetchHistory]);
 
+  // Auto-scroll chat to bottom as the AI is writing or executing
+  useEffect(() => {
+    if (project.status === 'generating' || project.status === 'executing') {
+      chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    }
+  }, [project.messages, project.status]);
+
   const handleSendMessage = async () => {
-    if (!chatInput.trim() || project.status === 'generating') return;
+    if (!chatInput.trim() || project.status === 'generating' || project.status === 'executing') return;
 
     const promptText = chatInput;
     const userMsg: Message = {
@@ -508,7 +649,18 @@ export default function App() {
 
     const currentHistory = project.messages.map(m => ({ role: m.role, content: m.content, thought: m.thought, steps: m.steps }));
     
-    const nextMessages = [...project.messages, userMsg];
+    const assistantMsgId = (Date.now() + 1).toString();
+    const assistantMsg: Message = {
+      id: assistantMsgId,
+      role: 'assistant',
+      content: '',
+      thought: '',
+      steps: [],
+      suggestions: [],
+      timestamp: Date.now()
+    };
+
+    const nextMessages = [...project.messages, userMsg, assistantMsg];
     messagesRef.current = nextMessages;
 
     setProject(prev => ({
@@ -520,7 +672,6 @@ export default function App() {
 
     const controller = new AbortController();
     abortControllerRef.current = controller;
-    const assistantMsgId = (Date.now() + 1).toString();
     let hasReceivedContent = false;
 
     const tz = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
@@ -555,22 +706,6 @@ export default function App() {
       let currentThought = "";
       let currentContent = "";
       let currentSteps: any[] = [];
-      
-      const assistantMsg: Message = {
-        id: assistantMsgId,
-        role: 'assistant',
-        content: '',
-        thought: '',
-        steps: [],
-        suggestions: [],
-        timestamp: Date.now()
-      };
-
-      setProject(prev => ({
-        ...prev,
-        messages: [...prev.messages, assistantMsg],
-        status: 'generating' // kept generating until done
-      }));
 
       if (!response.body) throw new Error("No response body");
       const reader = response.body.getReader();
@@ -609,8 +744,10 @@ export default function App() {
                       msgs[idx] = {
                         ...msgs[idx],
                         modelId: chunkObj.modelUsed,
-                        providerName: chunkObj.modelUsed,
-                        providerPlatform: chunkObj.providerPlatform || 'Google AI'
+                        providerName: chunkObj.providerName || chunkObj.modelUsed,
+                        providerPlatform: chunkObj.providerPlatform || 'Google AI',
+                        latency: chunkObj.latency,
+                        byok: chunkObj.byok
                       };
                     }
                     return { ...prev, messages: msgs };
@@ -674,7 +811,7 @@ export default function App() {
                   
                   // Parse steps dynamically
                   currentSteps = [];
-                  const stepRegex = /<step\s+status="([^"]+)">([\s\S]*?)(?:<\/step>|$)/g;
+                  const stepRegex = /<step\s+status=["']([^"']+)["']>([\s\S]*?)(?:<\/step>|$)/g;
                   let match;
                   let stepId = 1;
                   while ((match = stepRegex.exec(rawText)) !== null) {
@@ -686,6 +823,12 @@ export default function App() {
                     });
                   }
                   
+                  let displayContent = currentContent;
+                  displayContent = displayContent.replace(/<file[\s\S]*?(?:<\/file>|$)/g, '');
+                  displayContent = displayContent.replace(/<command[\s\S]*?(?:<\/command>|$)/g, '');
+                  displayContent = displayContent.replace(/<step[\s\S]*?(?:<\/step>|$)/g, '');
+                  displayContent = displayContent.trim();
+                  
                   setProject(prev => {
                     const msgs = [...prev.messages];
                     const idx = msgs.findIndex(m => m.id === assistantMsgId);
@@ -693,7 +836,7 @@ export default function App() {
                       msgs[idx] = { 
                         ...msgs[idx], 
                         thought: currentThought, 
-                        content: currentContent,
+                        content: displayContent,
                         steps: currentSteps.length > 0 ? currentSteps : msgs[idx].steps
                       };
                     }
@@ -722,8 +865,65 @@ export default function App() {
         }
       }
 
+      // Execute files and commands, and remove them from the visible content
+      const fileRegex = /<file\s+path=["']([^"']+)["']>([\s\S]*?)(?:<\/file>|$)/g;
+      const cmdRegex = /<command>([\s\S]*?)(?:<\/command>|$)/g;
+      const stepClearRegex = /<step\s+status=["'][^"']+["']>[\s\S]*?(?:<\/step>|$)/g;
+      
+      const filesToWrite: {path: string, content: string}[] = [];
+      let fileMatch;
+      while ((fileMatch = fileRegex.exec(currentContent)) !== null) {
+        filesToWrite.push({ path: fileMatch[1], content: fileMatch[2].trim() });
+      }
+
+      const commandsToRun: string[] = [];
+      let cmdMatch;
+      while ((cmdMatch = cmdRegex.exec(currentContent)) !== null) {
+        commandsToRun.push(cmdMatch[1].trim());
+      }
+
+       // Remove the raw XML tags from the content so they aren't shown to the user as "rubbish"
+      let cleanContent = currentContent.replace(fileRegex, '').replace(cmdRegex, '').replace(stepClearRegex, '').trim();
+      
+      if (!cleanContent) {
+        cleanContent = "I've written the files and executed the commands for you.";
+      }
+
       const suggestionsMatch = rawText.match(/<suggestion>([\s\S]*?)<\/suggestion>/g);
       const currentSuggestions = suggestionsMatch ? suggestionsMatch.map(s => s.replace(/<\/?suggestion>/g, '').trim()) : [];
+
+      // Generate dynamically expanded steps
+      const finalSteps: any[] = currentSteps.length > 0 ? [...currentSteps] : [];
+      let stepIdCounter = finalSteps.length + 1;
+
+      const hasExecutions = filesToWrite.length > 0 || commandsToRun.length > 0;
+
+      if (hasExecutions) {
+        filesToWrite.forEach((file) => {
+          finalSteps.push({
+            id: `file-write-${stepIdCounter++}`,
+            type: 'writing',
+            label: `Creating/Writing file: ${file.path}`,
+            status: 'pending'
+          });
+        });
+
+        commandsToRun.forEach((cmd) => {
+          finalSteps.push({
+            id: `command-run-${stepIdCounter++}`,
+            type: 'testing',
+            label: `Running command: ${cmd}`,
+            status: 'pending'
+          });
+        });
+
+        finalSteps.push({
+          id: `finalize-${stepIdCounter++}`,
+          type: 'handoff',
+          label: 'Refreshing preview & completing build',
+          status: 'pending'
+        });
+      }
 
       // Calculate final messages using the latest ref state
       const finalMsgs = [...messagesRef.current];
@@ -731,9 +931,9 @@ export default function App() {
       const finalAssistantMsg: Message = {
         id: assistantMsgId,
         role: 'assistant',
-        content: currentContent,
+        content: cleanContent,
         thought: currentThought,
-        steps: currentSteps.length > 0 ? currentSteps : (finalMsgs[mIdx]?.steps || []),
+        steps: finalSteps,
         suggestions: currentSuggestions,
         timestamp: Date.now()
       };
@@ -745,80 +945,152 @@ export default function App() {
       }
       messagesRef.current = finalMsgs;
 
-      // Update state for UI
+      // Update state for UI and set state to 'executing' if there are files or commands to run
       setProject(prev => ({
         ...prev,
         messages: finalMsgs,
-        status: 'idle'
+        status: hasExecutions ? 'executing' : 'idle'
       }));
 
-      // Persist to Firestore safely
-      if (user && finalMsgs.length > 0) {
-        try {
-          if (activeProject) {
-            // Project Mode: save to the "projects" collection
-            await updateDoc(doc(db, "projects", activeProject.id), {
-              messages: sanitizeForFirestore(finalMsgs),
-              lastModified: new Date()
-            });
-            // Also update local userProjects state to keep it in sync
-            setUserProjects(prev => prev.map(p => 
-              p.id === activeProject.id 
-                ? { ...p, messages: finalMsgs, lastModified: new Date() } 
-                : p
-            ));
-            // Keep activeProject state up to date
-            setActiveProject(prev => prev ? { ...prev, messages: finalMsgs, lastModified: new Date() } : null);
-          } else {
-            // Normal Chat Mode: save to the "chats" collection
-            const chatId = chatIdRef.current;
-            if (chatId) {
-              await updateDoc(doc(db, "chats", chatId), {
-                messages: sanitizeForFirestore(finalMsgs),
-                lastModified: new Date()
-              });
-              setChatHistory(prev => {
-                const hIdx = prev.findIndex(c => c.id === chatId);
-                if (hIdx !== -1) {
-                  const updatedChat = { ...prev[hIdx], messages: finalMsgs, lastModified: new Date() };
-                  return [updatedChat, ...prev.filter(c => c.id !== chatId)];
-                }
-                return prev;
-              });
-            } else if (finalMsgs.length >= 1) {
-              const docRef = await addDoc(collection(db, "chats"), {
-                userId: user.uid,
-                title: promptText.substring(0, 50) + (promptText.length > 50 ? "..." : ""),
-                messages: sanitizeForFirestore(finalMsgs),
-                lastModified: new Date()
-              });
-              const newId = docRef.id;
-              setCurrentChatId(newId);
-              chatIdRef.current = newId;
-              setChatHistory(prev => [
-                {
-                  id: newId,
-                  userId: user.uid,
-                  title: promptText.substring(0, 50) + (promptText.length > 50 ? "..." : ""),
-                  messages: finalMsgs,
-                  lastModified: new Date()
-                },
-                ...prev
-              ]);
+      // Helper to update a step's status in real-time
+      const updateStepStatus = (stepLabel: string, newStatus: 'pending' | 'running' | 'completed' | 'error' | 'failed') => {
+        setProject(prev => {
+          const msgs = [...prev.messages];
+          const idx = msgs.findIndex(m => m.id === assistantMsgId);
+          if (idx !== -1) {
+            const steps = msgs[idx].steps ? [...msgs[idx].steps] : [];
+            const stepIdx = steps.findIndex(s => s.label === stepLabel);
+            if (stepIdx !== -1) {
+              steps[stepIdx] = { ...steps[stepIdx], status: newStatus === 'failed' ? 'error' : newStatus };
             }
+            msgs[idx] = { ...msgs[idx], steps };
           }
-        } catch (dbErr) {
-          handleFirestoreError(dbErr, OperationType.WRITE, activeProject ? "projects" : "chats");
-        }
-      }
+          messagesRef.current = msgs;
+          return { ...prev, messages: msgs };
+        });
+      };
 
-      fetchFiles();
-      
-      // Auto-refresh preview if agent mode or changes
-      setTimeout(() => {
+      // Execute extracted files and commands sequentially in the background/foreground
+      if (hasExecutions) {
+        // Write files one by one to show realistic, high-fidelity real-time progress
+        for (const file of filesToWrite) {
+          const label = `Creating/Writing file: ${file.path}`;
+          updateStepStatus(label, 'running');
+          try {
+            await fetch('/api/files/write', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ projectId: activeProject?.id, filePath: file.path, content: file.content })
+            });
+            updateStepStatus(label, 'completed');
+          } catch (e) {
+            console.error(`Failed to write file ${file.path}:`, e);
+            updateStepStatus(label, 'error');
+          }
+        }
+
+        fetchFiles();
+
+        // Run commands one by one and stream to terminal
+        for (const cmd of commandsToRun) {
+          const label = `Running command: ${cmd}`;
+          updateStepStatus(label, 'running');
+          try {
+            setTerminalLogs(prev => [...prev, { id: Date.now().toString(), text: `$ ${cmd}`, type: 'cmd' }]);
+            const res = await fetch('/api/terminal/run', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ projectId: activeProject?.id, command: cmd })
+            });
+            const data = await res.json();
+            if (data.output) {
+               setTerminalLogs(prev => [...prev, { id: Date.now().toString(), text: data.output, type: 'output' }]);
+            }
+            updateStepStatus(label, 'completed');
+          } catch (e) {
+            console.error(`Failed to run command ${cmd}:`, e);
+            updateStepStatus(label, 'error');
+          }
+        }
+
+        // Finalize state
+        const finalizeLabel = 'Refreshing preview & completing build';
+        updateStepStatus(finalizeLabel, 'running');
+        await new Promise(resolve => setTimeout(resolve, 800));
         const iframe = document.getElementById('preview-iframe') as HTMLIFrameElement;
         if (iframe) iframe.src = iframe.src;
-      }, 500);
+        updateStepStatus(finalizeLabel, 'completed');
+
+        // Persist final executed messages to Firestore
+        const finalExecutedMsgs = [...messagesRef.current];
+        if (user && finalExecutedMsgs.length > 0) {
+          try {
+            if (activeProject) {
+              await updateDoc(doc(db, "projects", activeProject.id), {
+                messages: sanitizeForFirestore(finalExecutedMsgs),
+                lastModified: new Date()
+              });
+              setTimeout(() => fetchProjects(), 500);
+              setUserProjects(prev => prev.map(p => 
+                p.id === activeProject.id 
+                  ? { ...p, messages: finalExecutedMsgs, lastModified: new Date() } 
+                  : p
+              ));
+              setActiveProject(prev => prev ? { ...prev, messages: finalExecutedMsgs, lastModified: new Date() } : null);
+            } else {
+              const chatId = chatIdRef.current;
+              if (chatId) {
+                await updateDoc(doc(db, "chats", chatId), {
+                  messages: sanitizeForFirestore(finalExecutedMsgs),
+                  lastModified: new Date()
+                });
+                setTimeout(() => fetchHistory(), 500);
+              }
+            }
+          } catch (dbErr) {
+            console.error("Failed to save final executed steps to DB:", dbErr);
+          }
+        }
+
+        setProject(prev => ({ ...prev, status: 'idle' }));
+      } else {
+        // If no files/commands, just refresh and save initial finalMsgs
+        fetchFiles();
+        setTimeout(() => {
+          const iframe = document.getElementById('preview-iframe') as HTMLIFrameElement;
+          if (iframe) iframe.src = iframe.src;
+        }, 500);
+
+        if (user && finalMsgs.length > 0) {
+          try {
+            if (activeProject) {
+              await updateDoc(doc(db, "projects", activeProject.id), {
+                messages: sanitizeForFirestore(finalMsgs),
+                lastModified: new Date()
+              });
+              setTimeout(() => fetchProjects(), 500);
+              setUserProjects(prev => prev.map(p => 
+                p.id === activeProject.id 
+                  ? { ...p, messages: finalMsgs, lastModified: new Date() } 
+                  : p
+              ));
+              setActiveProject(prev => prev ? { ...prev, messages: finalMsgs, lastModified: new Date() } : null);
+            } else {
+              const chatId = chatIdRef.current;
+              if (chatId) {
+                await updateDoc(doc(db, "chats", chatId), {
+                  messages: sanitizeForFirestore(finalMsgs),
+                  lastModified: new Date()
+                });
+                setTimeout(() => fetchHistory(), 500);
+              }
+            }
+          } catch (dbErr) {
+            console.error("Failed to save final steps to DB:", dbErr);
+          }
+        }
+        setProject(prev => ({ ...prev, status: 'idle' }));
+      }
       
     } catch (error: any) {
       if (error.name === 'AbortError') {
@@ -839,20 +1111,31 @@ export default function App() {
         }
       }
       
-      // Stop the generation, return the screen to previous state, and restore text inside text box if no content was received
-      if (!hasReceivedContent) {
-        setChatInput(promptText);
-        setProject(prev => ({
+      // Stop the generation, return the screen to previous state, and display error inline in chat history
+      const finalErrorMsg = error.message || "An unexpected error occurred during execution.";
+      setProject(prev => {
+        const msgs = [...prev.messages];
+        const idx = msgs.findIndex(m => m.id === assistantMsgId);
+        if (idx !== -1) {
+          const steps = msgs[idx].steps ? [...msgs[idx].steps] : [];
+          const updatedSteps = steps.map(s => {
+            if (s.status === 'running' || s.status === 'pending') {
+              return { ...s, status: 'failed' as const };
+            }
+            return s;
+          });
+          msgs[idx] = { 
+            ...msgs[idx], 
+            steps: updatedSteps,
+            error: finalErrorMsg
+          };
+        }
+        return {
           ...prev,
-          messages: prev.messages.filter(msg => msg.id !== userMsg.id && msg.id !== assistantMsgId),
+          messages: msgs,
           status: 'idle'
-        }));
-      } else {
-        setProject(prev => ({
-          ...prev,
-          status: 'idle'
-        }));
-      }
+        };
+      });
     } finally {
       abortControllerRef.current = null;
     }
@@ -860,6 +1143,44 @@ export default function App() {
 
   const handleMessageFeedback = async (msgId: string, type: 'up' | 'down', content: string) => {
     setMessageFeedbacks(prev => ({ ...prev, [msgId]: type }));
+
+    // Persist feedback to local messages state and to Firestore document
+    setProject(prev => {
+      const msgs = prev.messages.map(m => m.id === msgId ? { ...m, feedback: type } : m);
+      
+      // Background save to Firestore
+      if (user) {
+        (async () => {
+          try {
+            if (activeProject) {
+              await updateDoc(doc(db, "projects", activeProject.id), {
+                messages: sanitizeForFirestore(msgs),
+                lastModified: new Date()
+              });
+              setUserProjects(pPrev => pPrev.map(p => 
+                p.id === activeProject.id 
+                  ? { ...p, messages: msgs, lastModified: new Date() } 
+                  : p
+              ));
+              setActiveProject(pPrev => pPrev ? { ...pPrev, messages: msgs, lastModified: new Date() } : null);
+            } else {
+              const chatId = chatIdRef.current;
+              if (chatId) {
+                await updateDoc(doc(db, "chats", chatId), {
+                  messages: sanitizeForFirestore(msgs),
+                  lastModified: new Date()
+                });
+              }
+            }
+          } catch (err) {
+            console.error("Failed to update message feedback in Firestore:", err);
+          }
+        })();
+      }
+
+      return { ...prev, messages: msgs };
+    });
+
     try {
       await fetch('/api/learn-feedback', {
         method: 'POST',
@@ -1348,25 +1669,31 @@ export default function App() {
         )}
       </AnimatePresence>
 
-      {/* AGENTS PANEL */}
+      {/* AGENTS PANEL: OMNIV1 MULTI-PROVIDER AI MESH CONTROL HUB */}
       <AnimatePresence>
         {isAgentsOpen && (
           <div className="fixed inset-0 z-[150] flex items-end justify-center">
             <motion.div 
               initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
               onClick={() => setIsAgentsOpen(false)}
-              className="absolute inset-0 bg-black/60 backdrop-blur-sm"
+              className="absolute inset-0 bg-black/70 backdrop-blur-md"
             />
             <motion.div
               initial={{ y: "100%" }} animate={{ y: 0 }} exit={{ y: "100%" }}
               transition={{ type: "spring", damping: 30, stiffness: 280 }}
-              className={`bg-white dark:bg-[#0F0F0F] border-t border-slate-200 dark:border-white/10 w-full max-w-4xl rounded-t-[2.5rem] p-6 shadow-2xl relative z-10 flex flex-col transition-all duration-300 ${agentsPanelExpanded ? 'h-[100vh]' : 'h-[66vh]'}`}
+              className={`bg-white dark:bg-[#090909] border-t border-slate-200 dark:border-white/10 w-full max-w-6xl rounded-t-[2.5rem] p-6 shadow-2xl relative z-10 flex flex-col transition-all duration-300 ${agentsPanelExpanded ? 'h-[100vh]' : 'h-[85vh]'}`}
             >
-              <div className="w-12 h-1.5 bg-slate-200 dark:bg-white/10 rounded-full mx-auto mb-5 shrink-0 cursor-pointer" onClick={() => setAgentsPanelExpanded(!agentsPanelExpanded)} />
+              <div className="w-12 h-1.5 bg-slate-200 dark:bg-white/10 rounded-full mx-auto mb-4 shrink-0 cursor-pointer" onClick={() => setAgentsPanelExpanded(!agentsPanelExpanded)} />
+              
               <div className="flex items-center justify-between mb-4 shrink-0">
-                <div className="flex items-center space-x-2.5">
-                  <Bot className="w-5 h-5 text-green-500" />
-                  <h3 className="text-base font-bold text-slate-950 dark:text-white">Agents & API Keys</h3>
+                <div className="flex items-center space-x-3">
+                  <div className="p-2 bg-green-500/10 text-green-500 rounded-xl">
+                    <Cpu className="w-6 h-6 animate-pulse" />
+                  </div>
+                  <div>
+                    <h3 className="text-lg font-bold text-slate-950 dark:text-white">OMNIV1 Multi-Provider AI Mesh</h3>
+                    <p className="text-xs text-slate-500">Autonomous self-healing LLM infrastructure with real-time failovers & BYOK key routing</p>
+                  </div>
                 </div>
                 <div className="flex items-center space-x-2">
                   <button onClick={() => setAgentsPanelExpanded(!agentsPanelExpanded)} className="p-1.5 rounded-xl hover:bg-slate-100 dark:hover:bg-white/10 text-slate-500 hover:text-slate-950 dark:hover:text-white">
@@ -1375,91 +1702,560 @@ export default function App() {
                   <button onClick={() => setIsAgentsOpen(false)} className="p-1.5 rounded-xl hover:bg-slate-100 dark:hover:bg-white/10 text-slate-500 hover:text-slate-950 dark:hover:text-white"><X className="w-5 h-5" /></button>
                 </div>
               </div>
-              <p className="text-xs text-slate-500 mb-6 shrink-0 border-b border-slate-200 dark:border-white/10 pb-4">Configure your own API keys. Enabled providers appear in the model switcher. Your keys are stored securely in your account.</p>
-              
-              <div className="flex-1 overflow-y-auto custom-scrollbar pr-2 space-y-4">
-                <div className="relative mb-4">
-                  <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
-                  <input type="text" placeholder="Search providers..." className="w-full bg-slate-50 dark:bg-white/5 border border-slate-200 dark:border-white/10 rounded-xl pl-9 pr-4 py-2 text-sm focus:outline-none focus:border-green-500 transition-all text-slate-900 dark:text-white" />
-                </div>
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  {AI_PLATFORMS.map(platform => {
-                    const isConfigured = !!userApiKeys[platform.id];
-                    const isEnabled = userApiKeys[platform.id]?.enabled;
-                    const isEditing = editingPlatform === platform.id;
-                    
-                    return (
-                      <div key={platform.id} className={`p-4 rounded-2xl border transition-all ${isEnabled ? 'bg-green-50/50 dark:bg-green-500/10 border-green-500/30' : 'bg-slate-50 dark:bg-white/5 border-slate-200 dark:border-white/10'}`}>
-                        <div className="flex items-start justify-between">
-                          <div className="flex items-center space-x-3">
-                            <span className="text-2xl">{platform.icon}</span>
-                            <div>
-                              <h4 className="font-bold text-slate-900 dark:text-white text-sm">{platform.name}</h4>
-                              <p className="text-[10px] text-slate-500">{platform.keyHint}</p>
-                            </div>
-                          </div>
-                          <div className="flex items-center space-x-3">
-                            {isConfigured && <span className={`text-[9px] font-bold uppercase tracking-wider px-2 py-0.5 rounded ${isEnabled ? 'bg-green-500/20 text-green-600 dark:text-green-400' : 'bg-slate-200 dark:bg-white/10 text-slate-500'}`}>{isEnabled ? 'ACTIVE' : 'OFF'}</span>}
-                            <div 
-                              onClick={() => {
-                                if (!isConfigured) {
-                                  setEditingPlatform(platform.id);
-                                  setEditingApiKey('');
-                                } else {
-                                  setUserApiKeys(prev => ({...prev, [platform.id]: {...prev[platform.id], enabled: !isEnabled}}));
-                                  fetch('/api/user-keys/save', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ userId: user?.uid, platform: platform.id, apiKey: userApiKeys[platform.id].apiKey, enabled: !isEnabled }) }).catch(console.error);
-                                }
-                              }}
-                              className={`w-10 h-5 rounded-full relative cursor-pointer transition-colors ${isEnabled ? 'bg-green-500' : 'bg-slate-300 dark:bg-white/20'}`}
-                            >
-                              <div className={`absolute top-1 w-3 h-3 bg-white rounded-full transition-all ${isEnabled ? 'right-1' : 'left-1'}`} />
-                            </div>
-                          </div>
-                        </div>
-                        <div className="mt-3">
-                          <p className="text-[10px] text-slate-500 font-mono"><span className="text-slate-400">Models:</span> {platform.models.join(', ')}</p>
-                        </div>
-                        {isEditing && (
-                          <div className="mt-4 pt-4 border-t border-slate-200 dark:border-white/10 space-y-3">
-                            <input 
-                              type="password" 
-                              value={editingApiKey} 
-                              onChange={e => setEditingApiKey(e.target.value)} 
-                              placeholder={`API Key (${platform.keyPlaceholder})`} 
-                              className="w-full bg-white dark:bg-[#0A0A0A] border border-slate-200 dark:border-white/10 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-green-500 font-mono text-slate-900 dark:text-white" 
-                            />
-                            <div className="flex space-x-2">
-                              <button 
-                                onClick={async () => {
-                                  if (!editingApiKey) return;
-                                  setSavingKey(true);
-                                  try {
-                                    await fetch('/api/user-keys/save', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ userId: user?.uid, platform: platform.id, apiKey: editingApiKey, enabled: true }) });
-                                    setUserApiKeys(prev => ({...prev, [platform.id]: { apiKey: editingApiKey, enabled: true }}));
-                                    setEditingPlatform(null);
-                                  } catch (e) {
-                                    console.error(e);
-                                  } finally {
-                                    setSavingKey(false);
-                                  }
-                                }} 
-                                disabled={!editingApiKey || savingKey}
-                                className="flex-1 py-1.5 bg-green-600 hover:bg-green-500 text-white rounded-lg font-bold text-xs transition-all disabled:opacity-50"
-                              >
-                                {savingKey ? 'Saving...' : 'Save & Enable'}
-                              </button>
-                              <button onClick={() => setEditingPlatform(null)} className="px-3 py-1.5 border border-slate-200 dark:border-white/10 text-slate-600 dark:text-slate-300 rounded-lg font-bold text-xs hover:bg-slate-50 dark:hover:bg-white/5 transition-all">Cancel</button>
-                            </div>
-                          </div>
-                        )}
+
+              {/* DUAL COLUMN CONTROL LAYOUT */}
+              <div className="flex-1 flex flex-col lg:flex-row gap-6 overflow-hidden min-h-0">
+                
+                {/* LEFT COLUMN: GLOBAL AI MESH ROUTER SETTINGS */}
+                <div className="w-full lg:w-80 shrink-0 bg-slate-50 dark:bg-white/5 border border-slate-200 dark:border-white/10 rounded-2xl p-4 flex flex-col justify-between overflow-y-auto">
+                  <div className="space-y-5">
+                    <div>
+                      <h4 className="text-xs font-bold text-slate-800 dark:text-slate-200 uppercase tracking-wider mb-3 flex items-center space-x-1.5">
+                        <Sliders className="w-3.5 h-3.5 text-purple-500" />
+                        <span>Mesh Routing Parameters</span>
+                      </h4>
+                      <p className="text-[11px] text-slate-500">Tune the autonomous failover algorithm's provider ranking priorities.</p>
+                    </div>
+
+                    {/* PRIORITY MODE */}
+                    <div className="space-y-1.5">
+                      <label className="text-[11px] font-bold text-slate-700 dark:text-slate-300">Optimization Goal (Priority Mode)</label>
+                      <select 
+                        value={routingConfig.priorityMode}
+                        onChange={(e) => setRoutingConfig((prev: any) => ({ ...prev, priorityMode: e.target.value }))}
+                        className="w-full bg-white dark:bg-[#0A0A0A] border border-slate-200 dark:border-white/10 rounded-xl px-3 py-2 text-xs focus:outline-none focus:border-green-500 text-slate-900 dark:text-white"
+                      >
+                        <option value="balanced">Balanced (Inference Stability & Latency)</option>
+                        <option value="fastest">Fastest (Sort by lowest provider latency)</option>
+                        <option value="cheapest">Cheapest (Sort by lowest compute cost weight)</option>
+                        <option value="best_quality">Best Quality (Sort by model capabilities weight)</option>
+                      </select>
+                    </div>
+
+                    {/* PREFERRED PROVIDER */}
+                    <div className="space-y-1.5">
+                      <label className="text-[11px] font-bold text-slate-700 dark:text-slate-300">Preferred Primary Provider</label>
+                      <select 
+                        value={routingConfig.preferredProviderId || ''}
+                        onChange={(e) => setRoutingConfig((prev: any) => ({ ...prev, preferredProviderId: e.target.value || null }))}
+                        className="w-full bg-white dark:bg-[#0A0A0A] border border-slate-200 dark:border-white/10 rounded-xl px-3 py-2 text-xs focus:outline-none focus:border-green-500 text-slate-900 dark:text-white"
+                      >
+                        <option value="">No Preferred (Let router rank autonomously)</option>
+                        {AI_PLATFORMS.map(p => (
+                          <option key={p.id} value={p.id}>{p.icon} {p.name}</option>
+                        ))}
+                      </select>
+                    </div>
+
+                    {/* FAILOVER SETTING */}
+                    <div className="flex items-center justify-between p-2 rounded-xl bg-white dark:bg-black/20 border border-slate-100 dark:border-white/5">
+                      <div className="flex flex-col pr-2">
+                        <span className="text-[11px] font-bold text-slate-800 dark:text-slate-200">Auto Failovers</span>
+                        <span className="text-[9px] text-slate-500">Survive provider errors seamlessly</span>
                       </div>
-                    );
-                  })}
+                      <div 
+                        onClick={() => setRoutingConfig((prev: any) => ({ ...prev, autoFailover: !prev.autoFailover }))}
+                        className={`w-9 h-5 rounded-full relative cursor-pointer transition-colors shrink-0 ${routingConfig.autoFailover ? 'bg-green-500' : 'bg-slate-300 dark:bg-white/10'}`}
+                      >
+                        <div className={`absolute top-0.5 w-4 h-4 bg-white rounded-full transition-all ${routingConfig.autoFailover ? 'right-0.5' : 'left-0.5'}`} />
+                      </div>
+                    </div>
+
+                    {/* HEALTH CHECK SETTING */}
+                    <div className="flex items-center justify-between p-2 rounded-xl bg-white dark:bg-black/20 border border-slate-100 dark:border-white/5">
+                      <div className="flex flex-col pr-2">
+                        <span className="text-[11px] font-bold text-slate-800 dark:text-slate-200">Periodic Health Checks</span>
+                        <span className="text-[9px] text-slate-500">Auto ping health diagnostics every 5m</span>
+                      </div>
+                      <div 
+                        onClick={() => setRoutingConfig((prev: any) => ({ ...prev, autoHealthCheck: !prev.autoHealthCheck }))}
+                        className={`w-9 h-5 rounded-full relative cursor-pointer transition-colors shrink-0 ${routingConfig.autoHealthCheck ? 'bg-green-500' : 'bg-slate-300 dark:bg-white/10'}`}
+                      >
+                        <div className={`absolute top-0.5 w-4 h-4 bg-white rounded-full transition-all ${routingConfig.autoHealthCheck ? 'right-0.5' : 'left-0.5'}`} />
+                      </div>
+                    </div>
+                  </div>
+
+                  <button 
+                    onClick={async () => {
+                      setSavingConfig(true);
+                      try {
+                        await fetch('/api/provider/config/save', {
+                          method: 'POST',
+                          headers: { 'Content-Type': 'application/json' },
+                          body: JSON.stringify({ userId: user?.uid, ...routingConfig })
+                        });
+                        await fetchMeshStatus();
+                        alert("Multi-Provider AI Mesh settings saved successfully!");
+                      } catch (e) {
+                        console.error(e);
+                      } finally {
+                        setSavingConfig(false);
+                      }
+                    }}
+                    disabled={savingConfig}
+                    className="w-full mt-6 py-2 bg-green-600 hover:bg-green-500 text-white rounded-xl font-bold text-xs transition-all flex items-center justify-center space-x-1.5 disabled:opacity-50"
+                  >
+                    {savingConfig ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}
+                    <span>Save Mesh Configuration</span>
+                  </button>
+                </div>
+
+                {/* RIGHT COLUMN: SEARCH + PROVIDER MESH DIRECTORY */}
+                <div className="flex-1 flex flex-col overflow-hidden">
+                  <div className="relative mb-4 shrink-0">
+                    <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+                    <input 
+                      type="text" 
+                      placeholder="Search and configure 12 providers (e.g. Groq, Cerebras, OpenRouter...)" 
+                      value={providerSearch}
+                      onChange={(e) => setProviderSearch(e.target.value)}
+                      className="w-full bg-slate-50 dark:bg-white/5 border border-slate-200 dark:border-white/10 rounded-xl pl-9 pr-4 py-2.5 text-sm focus:outline-none focus:border-green-500 transition-all text-slate-900 dark:text-white" 
+                    />
+                  </div>
+
+                  {/* ACTIVE PROVIDER CARDS SCROLLABLE CONTAINER */}
+                  <div className="flex-1 overflow-y-auto custom-scrollbar pr-2 space-y-3">
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      {AI_PLATFORMS.filter(p => p.name.toLowerCase().includes(providerSearch.toLowerCase())).map(platform => {
+                        const s = meshStatuses.find(status => status.id === platform.id);
+                        const isEditing = editingProviderId === platform.id;
+                        
+                        // Status styling
+                        const healthState = s?.healthState || (s?.enabled === false ? 'disabled' : 'healthy');
+                        const statusColors: Record<string, { label: string, badge: string, dot: string }> = {
+                          healthy: { label: "Healthy", badge: "bg-green-500/10 text-green-600 dark:text-green-400 border-green-500/20", dot: "bg-green-500" },
+                          rate_limited: { label: "Rate Limited", badge: "bg-yellow-500/10 text-yellow-600 dark:text-yellow-400 border-yellow-500/20", dot: "bg-yellow-500" },
+                          quota_low: { label: "Quota Low", badge: "bg-orange-500/10 text-orange-600 dark:text-orange-400 border-orange-500/20", dot: "bg-orange-500" },
+                          offline: { label: "Circuit Open / Offline", badge: "bg-red-500/10 text-red-600 dark:text-red-400 border-red-500/20", dot: "bg-red-500 animate-pulse" },
+                          disabled: { label: "Disabled", badge: "bg-slate-500/10 text-slate-500 border-slate-500/20", dot: "bg-slate-500" }
+                        };
+                        const activeStyle = statusColors[healthState] || statusColors.healthy;
+
+                        return (
+                          <div 
+                            key={platform.id} 
+                            className={`p-4 rounded-2xl border transition-all duration-300 relative overflow-hidden flex flex-col justify-between ${
+                              s?.enabled === false 
+                                ? 'bg-slate-50/50 dark:bg-white/[0.01] border-slate-200 dark:border-white/5 opacity-70' 
+                                : 'bg-slate-50 dark:bg-white/[0.03] border-slate-200 dark:border-white/10 hover:border-green-500/30'
+                            }`}
+                          >
+                            <div className="space-y-3">
+                              {/* HEADER */}
+                              <div className="flex items-start justify-between">
+                                <div className="flex items-center space-x-2.5">
+                                  <span className="text-2xl filter drop-shadow-md">{platform.icon}</span>
+                                  <div>
+                                    <h4 className="font-bold text-slate-900 dark:text-white text-sm">{platform.name}</h4>
+                                    <span className="text-[9px] text-slate-400 font-mono block">{platform.keyHint}</span>
+                                  </div>
+                                </div>
+                                <div className="flex items-center space-x-2">
+                                  {/* HEALTH STATE BADGE */}
+                                  <span className={`text-[8px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full border flex items-center space-x-1 ${activeStyle.badge}`}>
+                                    <span className={`w-1.5 h-1.5 rounded-full ${activeStyle.dot}`} />
+                                    <span>{activeStyle.label}</span>
+                                  </span>
+                                  
+                                  {/* ENABLE/DISABLE TOGGLE */}
+                                  <div 
+                                    onClick={async () => {
+                                      const nextEnabled = !(s?.enabled ?? true);
+                                      try {
+                                        await fetch('/api/provider/settings/save', {
+                                          method: 'POST',
+                                          headers: { 'Content-Type': 'application/json' },
+                                          body: JSON.stringify({ userId: user?.uid, providerId: platform.id, enabled: nextEnabled, priority: s?.metrics?.priority || 5 })
+                                        });
+                                        await fetchMeshStatus();
+                                      } catch (err) {
+                                        console.error(err);
+                                      }
+                                    }}
+                                    className={`w-8 h-4.5 rounded-full relative cursor-pointer transition-colors shrink-0 ${s?.enabled !== false ? 'bg-green-500' : 'bg-slate-300 dark:bg-white/10'}`}
+                                  >
+                                    <div className={`absolute top-0.5 w-3.5 h-3.5 bg-white rounded-full transition-all ${s?.enabled !== false ? 'right-0.5' : 'left-0.5'}`} />
+                                  </div>
+                                </div>
+                              </div>
+
+                              {/* MODELS LIST */}
+                              <p className="text-[10px] text-slate-500"><span className="text-slate-400 font-bold font-sans">Mesh Models:</span> <span className="font-mono text-[9px]">{platform.models.join(', ')}</span></p>
+
+                              {/* METRICS ROW */}
+                              {s?.metrics && s.enabled !== false && (
+                                <div className="grid grid-cols-4 gap-2 py-1.5 px-2 bg-slate-100 dark:bg-white/5 rounded-xl text-center border border-slate-200/50 dark:border-white/5">
+                                  <div className="flex flex-col">
+                                    <span className="text-[8px] text-slate-400 uppercase">Success</span>
+                                    <span className="text-[10px] font-bold font-mono text-green-500">{(s.metrics.successRate * 100).toFixed(0)}%</span>
+                                  </div>
+                                  <div className="flex flex-col">
+                                    <span className="text-[8px] text-slate-400 uppercase">Latency</span>
+                                    <span className="text-[10px] font-bold font-mono text-blue-400">{s.metrics.latency}ms</span>
+                                  </div>
+                                  <div className="flex flex-col">
+                                    <span className="text-[8px] text-slate-400 uppercase">Fails</span>
+                                    <span className="text-[10px] font-bold font-mono text-red-500">{s.metrics.consecutiveFailures}</span>
+                                  </div>
+                                  <div className="flex flex-col">
+                                    <span className="text-[8px] text-slate-400 uppercase">Requests</span>
+                                    <span className="text-[10px] font-bold font-mono text-slate-300">{s.metrics.totalRequests}</span>
+                                  </div>
+                                </div>
+                              )}
+
+                              {/* KEY TYPE BADGE */}
+                              {s && s.enabled !== false && (
+                                <div className="text-[9px] text-slate-500 flex items-center space-x-1">
+                                  <KeyRound className="w-3 h-3 text-slate-400" />
+                                  <span>{s.hasUserKey ? "Authorized via User BYOK API key" : (s.hasBuiltInKey ? "Authorized via Built-in Shared Mesh key" : "No Key Set")}</span>
+                                </div>
+                              )}
+                            </div>
+
+                            {/* FOOTER & KEY FIELD EDIT CONTROLS */}
+                            <div className="mt-4 pt-3 border-t border-slate-200/50 dark:border-white/5">
+                              {!isEditing ? (
+                                <div className="flex items-center justify-between">
+                                  <button 
+                                    onClick={() => {
+                                      setEditingProviderId(platform.id);
+                                      setProviderApiKey('');
+                                      setProviderPriority(s?.metrics?.priority || 5);
+                                      setTempApiKeys(s?.apiKeys || []);
+                                      setCloudflareAccountIdInput(s?.cloudflareAccountId || '');
+                                      setHuggingFaceModelIdInput(s?.huggingFaceModelId || '');
+                                      setTestResult(null);
+                                    }}
+                                    className="px-3 py-1 bg-slate-200 dark:bg-white/10 hover:bg-slate-300 dark:hover:bg-white/20 text-slate-800 dark:text-slate-200 rounded-lg font-bold text-[11px] transition-all"
+                                  >
+                                    Configure Key
+                                  </button>
+                                  {s?.quotaStatus && <span className="text-[9px] font-mono text-slate-500">{s.quotaStatus}</span>}
+                                </div>
+                              ) : (
+                                <div className="space-y-4 p-3 bg-slate-100 dark:bg-black/25 rounded-xl border border-slate-200/60 dark:border-white/5">
+                                  {/* Existing Keys list */}
+                                  <div className="space-y-1.5">
+                                    <label className="text-[10px] font-bold text-slate-400 block">Authorized API Key(s)</label>
+                                    {tempApiKeys.length === 0 ? (
+                                      <p className="text-[10px] text-slate-500 italic">No keys added yet. Add at least one key to use BYOK.</p>
+                                    ) : (
+                                      <div className="space-y-1 max-h-32 overflow-y-auto custom-scrollbar">
+                                        {tempApiKeys.map((k, idx) => (
+                                          <div key={idx} className="flex items-center justify-between bg-white dark:bg-white/5 border border-slate-200 dark:border-white/10 px-2 py-1 rounded-lg">
+                                            <span className="text-[10px] font-mono text-slate-700 dark:text-slate-300">
+                                              Key #{idx + 1}: {k ? (k.length > 10 ? `${k.substring(0, 6)}••••${k.substring(k.length - 4)}` : "••••••••") : ""}
+                                            </span>
+                                            <button
+                                              onClick={() => {
+                                                setTempApiKeys(prev => prev.filter((_, i) => i !== idx));
+                                              }}
+                                              className="text-[10px] text-red-500 hover:text-red-400 font-bold px-1"
+                                              title="Delete Key"
+                                            >
+                                              Remove
+                                            </button>
+                                          </div>
+                                        ))}
+                                      </div>
+                                    )}
+                                  </div>
+
+                                  {/* Input to add a new key */}
+                                  <div className="space-y-2 pt-2 border-t border-slate-200 dark:border-white/5">
+                                    <div className="flex gap-2 items-end">
+                                      <div className="flex-1 space-y-1">
+                                        <label className="text-[9px] font-bold text-slate-400 block">Add New API Key</label>
+                                        <input 
+                                          type="password" 
+                                          value={providerApiKey}
+                                          onChange={(e) => setProviderApiKey(e.target.value)}
+                                          placeholder={`Add Key (${platform.keyPlaceholder})`}
+                                          className="w-full bg-white dark:bg-[#0A0A0A] border border-slate-200 dark:border-white/10 rounded-lg px-2.5 py-1.5 text-xs font-mono text-slate-900 dark:text-white focus:outline-none focus:border-green-500"
+                                        />
+                                      </div>
+                                      <button 
+                                        onClick={async () => {
+                                          if (!providerApiKey) return;
+                                          setTestingKeyId(platform.id);
+                                          setTestResult(null);
+                                          try {
+                                            const res = await fetch('/api/provider/test-key', {
+                                              method: 'POST',
+                                              headers: { 'Content-Type': 'application/json' },
+                                              body: JSON.stringify({ 
+                                                providerId: platform.id, 
+                                                apiKey: providerApiKey,
+                                                accountId: platform.id === 'cloudflare' ? cloudflareAccountIdInput : (platform.id === 'huggingface' ? huggingFaceModelIdInput : undefined)
+                                              })
+                                            });
+                                            const data = await res.json();
+                                            setTestResult(data);
+                                            if (data.success) {
+                                              // Add key to tempApiKeys list
+                                              setTempApiKeys(prev => [...prev, providerApiKey]);
+                                              setProviderApiKey('');
+                                            }
+                                          } catch (e: any) {
+                                            setTestResult({ success: false, error: e.message });
+                                          } finally {
+                                            setTestingKeyId(null);
+                                          }
+                                        }}
+                                        disabled={!providerApiKey || testingKeyId === platform.id}
+                                        className="px-2.5 py-1.5 bg-slate-200 dark:bg-white/10 hover:bg-slate-300 dark:hover:bg-white/20 rounded-lg font-bold text-[10px] text-slate-800 dark:text-slate-200 transition-all disabled:opacity-40 whitespace-nowrap h-[34px]"
+                                      >
+                                        {testingKeyId === platform.id ? "Testing..." : "Test & Add"}
+                                      </button>
+                                    </div>
+                                  </div>
+
+                                  {/* Cloudflare Account ID Field */}
+                                  {platform.id === 'cloudflare' && (
+                                    <div className="space-y-1 pt-2 border-t border-slate-200 dark:border-white/5">
+                                      <label className="text-[10px] font-bold text-slate-400 block">Cloudflare Account ID (Required)</label>
+                                      <input 
+                                        type="text" 
+                                        value={cloudflareAccountIdInput}
+                                        onChange={(e) => setCloudflareAccountIdInput(e.target.value)}
+                                        placeholder="Enter Cloudflare Account ID"
+                                        className="w-full bg-white dark:bg-[#0A0A0A] border border-slate-200 dark:border-white/10 rounded-lg px-2.5 py-1.5 text-xs font-mono text-slate-900 dark:text-white focus:outline-none focus:border-green-500"
+                                      />
+                                    </div>
+                                  )}
+
+                                  {/* Hugging Face Model ID Field */}
+                                  {platform.id === 'huggingface' && (
+                                    <div className="space-y-1 pt-2 border-t border-slate-200 dark:border-white/5">
+                                      <label className="text-[10px] font-bold text-slate-400 block">Default Hugging Face Model ID</label>
+                                      <input 
+                                        type="text" 
+                                        value={huggingFaceModelIdInput}
+                                        onChange={(e) => setHuggingFaceModelIdInput(e.target.value)}
+                                        placeholder="e.g. google/gemma-2-9b-it"
+                                        className="w-full bg-white dark:bg-[#0A0A0A] border border-slate-200 dark:border-white/10 rounded-lg px-2.5 py-1.5 text-xs font-mono text-slate-900 dark:text-white focus:outline-none focus:border-green-500"
+                                      />
+                                      <span className="text-[8px] text-slate-400 block">Suggestions: deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B, meta-llama/Llama-3.2-3B-Instruct</span>
+                                    </div>
+                                  )}
+
+                                  {/* PRIORITY SLIDER */}
+                                  <div className="space-y-1 pt-2 border-t border-slate-200 dark:border-white/5">
+                                    <div className="flex justify-between text-[10px] font-bold text-slate-400">
+                                      <span>Router Priority weight</span>
+                                      <span className="font-mono">{providerPriority}/10</span>
+                                    </div>
+                                    <input 
+                                      type="range" min="1" max="10" 
+                                      value={providerPriority}
+                                      onChange={(e) => setProviderPriority(Number(e.target.value))}
+                                      className="w-full accent-green-500 h-1 bg-slate-200 dark:bg-white/10 rounded-lg appearance-none cursor-pointer"
+                                    />
+                                  </div>
+
+                                  {/* TEST RESULT MESSAGE */}
+                                  {testResult && (
+                                    <div className={`p-2 rounded-xl text-[10px] font-mono border ${testResult.success ? 'bg-green-500/15 border-green-500/30 text-green-400' : 'bg-red-500/15 border-red-500/30 text-red-400'}`}>
+                                      {testResult.success ? `🟢 Validation Successful! Models found: ${testResult.models.slice(0, 3).join(', ')}` : `🔴 Validation Failed: ${testResult.error}`}
+                                    </div>
+                                  )}
+
+                                  {/* BUTTONS */}
+                                  <div className="flex items-center space-x-2 pt-2 border-t border-slate-200 dark:border-white/5">
+                                    <button 
+                                      onClick={async () => {
+                                        try {
+                                          await fetch('/api/provider/settings/save', {
+                                            method: 'POST',
+                                            headers: { 'Content-Type': 'application/json' },
+                                            body: JSON.stringify({ 
+                                              userId: user?.uid, 
+                                              providerId: platform.id, 
+                                              enabled: true, 
+                                              apiKeys: tempApiKeys,
+                                              cloudflareAccountId: platform.id === 'cloudflare' ? cloudflareAccountIdInput : undefined,
+                                              huggingFaceModelId: platform.id === 'huggingface' ? huggingFaceModelIdInput : undefined,
+                                              priority: providerPriority 
+                                            })
+                                          });
+                                          await fetchMeshStatus();
+                                          setEditingProviderId(null);
+                                        } catch (err) {
+                                          console.error(err);
+                                        }
+                                      }}
+                                      className="flex-1 py-1.5 bg-green-600 hover:bg-green-500 text-white rounded-lg font-bold text-[10px] transition-all text-center"
+                                    >
+                                      Save Settings
+                                    </button>
+
+                                    <button 
+                                      onClick={() => setEditingProviderId(null)}
+                                      className="px-2.5 py-1.5 border border-slate-200 dark:border-white/5 hover:bg-slate-100 dark:hover:bg-white/5 text-slate-500 rounded-lg text-[10px] font-bold"
+                                    >
+                                      Cancel
+                                    </button>
+                                  </div>
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
                 </div>
               </div>
               <div className="mt-4 pt-4 border-t border-slate-200 dark:border-white/10 shrink-0 text-center">
-                <p className="text-[10px] text-slate-500 italic">"The Omni brain is always active — your keys enhance it without replacing the core intelligence."</p>
+                <p className="text-[10px] text-slate-500 italic">"The autonomous multi-provider AI Mesh self-heals by routing through circuits, preserving active memory states."</p>
               </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* DEPLOY MODAL */}
+      <AnimatePresence>
+        {isDeployModalOpen && (
+          <div className="fixed inset-0 z-[200] flex items-center justify-center p-4">
+            <motion.div 
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setIsDeployModalOpen(false)}
+              className="absolute inset-0 bg-black/60 backdrop-blur-sm"
+            />
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 20 }}
+              className="relative w-full max-w-xl bg-white dark:bg-[#0A0A0A] border border-slate-200 dark:border-white/10 rounded-2xl p-6 shadow-2xl flex flex-col"
+            >
+              <button 
+                onClick={() => setIsDeployModalOpen(false)}
+                className="absolute top-4 right-4 p-2 rounded-full hover:bg-slate-100 dark:hover:bg-white/10 transition-colors text-slate-500"
+              >
+                <X className="w-5 h-5" />
+              </button>
+
+              <h2 className="text-2xl font-bold text-slate-900 dark:text-white mb-2 flex items-center gap-3">
+                <Rocket className="w-6 h-6 text-blue-500" />
+                Deploy to Production
+              </h2>
+              <p className="text-sm text-slate-500 dark:text-slate-400 mb-8">
+                Ship your project instantly to a global edge network.
+              </p>
+
+              {deployResult ? (
+                <div className="flex flex-col items-center justify-center py-8 space-y-4">
+                  <div className="w-16 h-16 bg-green-500/20 rounded-full flex items-center justify-center mb-2">
+                    <Check className="w-8 h-8 text-green-500" />
+                  </div>
+                  <h3 className="text-xl font-bold text-slate-900 dark:text-white">Deployed Successfully!</h3>
+                  <a 
+                    href={deployResult.url} 
+                    target="_blank" 
+                    rel="noreferrer"
+                    className="text-blue-500 hover:text-blue-400 font-mono underline underline-offset-4 flex items-center gap-2"
+                  >
+                    {deployResult.url} <ExternalLink className="w-4 h-4" />
+                  </a>
+                  <button 
+                    onClick={() => setIsDeployModalOpen(false)}
+                    className="mt-6 px-6 py-2 bg-slate-900 dark:bg-white text-white dark:text-black rounded-lg font-bold"
+                  >
+                    Done
+                  </button>
+                </div>
+              ) : isDeploying ? (
+                <div className="flex flex-col items-center justify-center py-12 space-y-6">
+                  <div className="relative">
+                    <div className="w-16 h-16 border-4 border-blue-500/20 rounded-full"></div>
+                    <div className="w-16 h-16 border-4 border-blue-500 rounded-full border-t-transparent animate-spin absolute inset-0"></div>
+                  </div>
+                  <div className="text-center space-y-2">
+                    <p className="text-lg font-bold text-slate-900 dark:text-white animate-pulse">
+                      Deploying to {deployPlatform === 'vercel' ? 'Vercel' : 'Netlify'}...
+                    </p>
+                    <p className="text-sm text-slate-500 font-mono">Zipping files & Uploading</p>
+                  </div>
+                </div>
+              ) : (
+                <div className="space-y-6">
+                  <div className="grid grid-cols-2 gap-4">
+                    <button
+                      onClick={() => setDeployPlatform('vercel')}
+                      className={cn(
+                        "p-6 rounded-xl border-2 text-left transition-all flex flex-col items-center gap-4",
+                        deployPlatform === 'vercel' 
+                          ? "border-black dark:border-white bg-slate-50 dark:bg-white/5" 
+                          : "border-slate-200 dark:border-white/10 hover:border-slate-300 dark:hover:border-white/20"
+                      )}
+                    >
+                      <div className="w-12 h-12 flex items-center justify-center bg-black dark:bg-white text-white dark:text-black rounded-full text-2xl font-bold">V</div>
+                      <span className="font-bold text-lg dark:text-white">Vercel</span>
+                    </button>
+                    <button
+                      onClick={() => setDeployPlatform('netlify')}
+                      className={cn(
+                        "p-6 rounded-xl border-2 text-left transition-all flex flex-col items-center gap-4 opacity-50 cursor-not-allowed",
+                        deployPlatform === 'netlify' 
+                          ? "border-[#00C7B7] bg-[#00C7B7]/10" 
+                          : "border-slate-200 dark:border-white/10"
+                      )}
+                      disabled
+                    >
+                      <div className="w-12 h-12 flex items-center justify-center bg-[#00C7B7] text-white rounded-full text-2xl font-bold">N</div>
+                      <span className="font-bold text-lg dark:text-white flex items-center gap-2">Netlify <span className="text-[10px] bg-slate-200 dark:bg-white/10 px-2 py-0.5 rounded uppercase tracking-wider text-slate-500">Soon</span></span>
+                    </button>
+                  </div>
+
+                  {deployPlatform === 'vercel' && (
+                    <div className="space-y-4 animate-in fade-in slide-in-from-top-4 duration-300">
+                      <div>
+                        <label className="block text-sm font-bold text-slate-700 dark:text-slate-300 mb-2">Vercel Token</label>
+                        <input
+                          type="password"
+                          value={deployToken}
+                          onChange={(e) => setDeployToken(e.target.value)}
+                          placeholder="Your Vercel Access Token"
+                          className="w-full bg-slate-50 dark:bg-black/50 border border-slate-200 dark:border-white/10 rounded-lg px-4 py-3 text-sm focus:outline-none focus:border-blue-500 font-mono dark:text-white transition-colors"
+                        />
+                        <p className="mt-2 text-xs text-slate-500">
+                          Create a token at <a href="https://vercel.com/account/tokens" target="_blank" rel="noreferrer" className="text-blue-500 hover:underline">vercel.com/account/tokens</a>
+                        </p>
+                      </div>
+
+                      <button
+                        onClick={async () => {
+                          if (!deployToken) return alert("Please enter a token");
+                          setIsDeploying(true);
+                          try {
+                            const res = await fetch('/api/deploy/vercel', {
+                              method: 'POST',
+                              headers: { 'Content-Type': 'application/json' },
+                              body: JSON.stringify({ token: deployToken, projectId: activeProject?.id })
+                            });
+                            const data = await res.json();
+                            if (data.error) throw new Error(data.error);
+                            setDeployResult({ url: data.url, platform: 'vercel' });
+                          } catch (err: any) {
+                            alert(err.message);
+                          } finally {
+                            setIsDeploying(false);
+                          }
+                        }}
+                        disabled={!deployToken || isDeploying}
+                        className="w-full py-3 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 disabled:cursor-not-allowed text-white rounded-lg font-bold shadow-lg shadow-blue-600/20 transition-all flex items-center justify-center gap-2"
+                      >
+                        <Rocket className="w-5 h-5" /> Deploy to Vercel
+                      </button>
+                    </div>
+                  )}
+                </div>
+              )}
             </motion.div>
           </div>
         )}
@@ -1504,18 +2300,24 @@ export default function App() {
 
               <div className="space-y-2.5 overflow-y-auto custom-scrollbar pr-1">
                  {[
-                  { id: "omni-google", name: "Omni Google", desc: "Powered by Gemini 2.0 Flash. Multi-modal, fast, and highly capable for most tasks.", icon: Zap, badge: "LATEST" },
-                  { id: "omni-groq", name: "Omni Groq", desc: "Powered by Groq. Ultra-fast LLaMA models with instant response times.", icon: Zap, badge: "FASTEST" },
-                  { id: "omni-anthropic", name: "Omni Anthropic", desc: "Powered by Claude 3.5 Sonnet. Exceptional coding, reasoning, and nuance.", icon: Cpu, badge: "PRO" },
-                  { id: "omni-openai", name: "Omni OpenAI", desc: "Powered by GPT-4o. The gold standard for reasoning and versatile logic.", icon: Globe, badge: "PRO" },
-                  { id: "omni-openrouter", name: "Omni OpenRouter", desc: "Access 100+ models via a single API key. Highly flexible.", icon: Globe, badge: "VERSATILE" },
-                  { id: "omni-huggingface", name: "Omni Hugging Face", desc: "Open-source excellence. Access thousands of community models.", icon: Bot, badge: "OPEN-SOURCE" },
-                  { id: "omni-mistral", name: "Omni Mistral", desc: "European efficiency. Powerful models like Mistral Large and Pixtral.", icon: Cpu, badge: "EFFICIENT" },
+                  { id: "omni-google", name: "Omni Google", providerId: "google", desc: "Powered by Gemini 3.5 Flash. Multi-modal, fast, and highly capable for most tasks.", icon: Zap, badge: "LATEST" },
+                  { id: "omni-groq", name: "Omni Groq", providerId: "groq", desc: "Powered by Groq. Ultra-fast LLaMA models with instant response times.", icon: Zap, badge: "FASTEST" },
+                  { id: "omni-openrouter", name: "Omni OpenRouter", providerId: "openrouter", desc: "Access 100+ models via a single API key. Highly flexible.", icon: Globe, badge: "VERSATILE" },
+                  { id: "omni-deepseek", name: "Omni DeepSeek", providerId: "deepseek", desc: "Powered by DeepSeek V3 and DeepSeek R1 models. Exceptional code and reasoning.", icon: Cpu, badge: "INTELLIGENT" },
+                  { id: "omni-mistral", name: "Omni Mistral", providerId: "mistral", desc: "European efficiency. Powerful models like Mistral Large and Pixtral.", icon: Cpu, badge: "EFFICIENT" },
+                  { id: "omni-huggingface", name: "Omni Hugging Face", providerId: "huggingface", desc: "Open-source excellence. Access thousands of community models.", icon: Bot, badge: "OPEN-SOURCE" },
+                  { id: "omni-cerebras", name: "Omni Cerebras", providerId: "cerebras", desc: "Ultra-low-latency Cerebras CS-3 computer systems powering LLaMA models.", icon: Zap, badge: "CS-3 CHIP" },
+                  { id: "omni-github", name: "Omni GitHub Models", providerId: "github", desc: "Microsoft and GitHub's ecosystem. Integrated development models.", icon: Bot, badge: "DEV" },
+                  { id: "omni-cloudflare", name: "Omni Cloudflare", providerId: "cloudflare", desc: "Edge-computed Workers AI model deployments. Fast and globally distributed.", icon: Globe, badge: "EDGE" },
+                  { id: "omni-together", name: "Omni Together AI", providerId: "together", desc: "Together.xyz's high-performance open model inference engine.", icon: Cpu, badge: "PRO" },
+                  { id: "omni-fireworks", name: "Omni Fireworks", providerId: "fireworks", desc: "Fireworks.ai high-speed model execution platform.", icon: Zap, badge: "FASTEST" },
+                  { id: "omni-nvidia", name: "Omni NVIDIA Build", providerId: "nvidia", desc: "Nvidia API catalog. Hardware-optimized world-class models.", icon: Cpu, badge: "PRO" },
                   ...AI_PLATFORMS
                     .filter(p => userApiKeys[p.id]?.enabled)
                     .flatMap(p => p.models.map(m => ({
                       id: `user-${p.id}-${m}`,
                       name: `${m}`,
+                      providerId: p.id,
                       desc: `Your ${p.name} key • ${m}`,
                       badge: 'YOUR KEY',
                       icon: Bot,
@@ -1524,6 +2326,23 @@ export default function App() {
                 ].map((m) => {
                   const isSelected = selectedModel === m.id;
                   const IconComponent = m.icon;
+                  
+                  // Extract provider info
+                  const providerId = m.providerId;
+                  const s = meshStatuses.find(st => st.id === providerId);
+                  const isEnabled = s?.enabled !== false;
+                  const healthState = s?.healthState || (isEnabled ? 'healthy' : 'disabled');
+                  
+                  // Status style mapping
+                  const stateLabels: Record<string, { text: string; css: string }> = {
+                    healthy: { text: "🟢 Healthy", css: "text-green-500" },
+                    rate_limited: { text: "🟡 Rate Limited", css: "text-yellow-500" },
+                    quota_low: { text: "🟠 Quota Low", css: "text-orange-500" },
+                    offline: { text: "🔴 Offline", css: "text-red-500" },
+                    disabled: { text: "⚫ Disabled", css: "text-slate-500" }
+                  };
+                  const statusInfo = stateLabels[healthState] || stateLabels.healthy;
+
                   return (
                     <button
                       key={m.id}
@@ -1545,9 +2364,12 @@ export default function App() {
                         <IconComponent className="w-4.5 h-4.5" />
                       </div>
                       <div className="flex-1 min-w-0">
-                        <div className="flex items-center space-x-2">
-                          <span className="font-bold text-slate-900 dark:text-white text-sm">{m.name}</span>
-                          <span className="text-[9px] font-mono px-1.5 py-0.5 rounded bg-slate-200 dark:bg-white/10 font-bold text-slate-500 dark:text-slate-400">{m.badge}</span>
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center space-x-2">
+                            <span className="font-bold text-slate-900 dark:text-white text-sm">{m.name}</span>
+                            <span className="text-[9px] font-mono px-1.5 py-0.5 rounded bg-slate-200 dark:bg-white/10 font-bold text-slate-500 dark:text-slate-400">{m.badge}</span>
+                          </div>
+                          <span className={`text-[9px] font-mono font-semibold ${statusInfo.css}`}>{statusInfo.text}</span>
                         </div>
                         <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5 leading-relaxed">{m.desc}</p>
                       </div>
@@ -2042,13 +2864,41 @@ export default function App() {
                           <ChevronRight className="w-3 h-3" />
                         )}
                       </button>
+
+                      {activeProject === null && (
+                        <button
+                          onClick={() => {
+                            setCurrentChatId(null);
+                            chatIdRef.current = null;
+                            setProject(prev => ({ ...prev, messages: [] }));
+                          }}
+                          className="px-2 py-0.5 rounded bg-blue-500/10 text-blue-500 hover:bg-blue-500/20 transition-colors"
+                        >
+                          + New Chat
+                        </button>
+                      )}
                     </div>
 
                     {isHistorySectionExpanded && (
                       <div className="flex-1 overflow-y-auto custom-scrollbar space-y-1 pr-1">
+                        {historyError && (
+                          <div className="mx-2 mb-2 p-2 bg-yellow-500/10 border border-yellow-500/20 rounded-xl relative">
+                            <button onClick={() => setHistoryError(false)} className="absolute top-1.5 right-1.5 text-yellow-600 hover:text-yellow-800"><X className="w-3.5 h-3.5" /></button>
+                            <p className="text-[10px] text-yellow-600 dark:text-yellow-400 font-medium leading-tight">⚠️ Could not load history. Create a Firestore index: chats [userId ASC, lastModified DESC]</p>
+                          </div>
+                        )}
                         {(() => {
                           const uniqueChats: any[] = Array.from(new Map((chatHistory as any[]).map((chat: any) => [chat.id, chat])).values());
                           if (uniqueChats.length === 0) {
+                            if (!historyError) {
+                              return (
+                                <div className="space-y-2 px-2">
+                                  {[1, 2, 3].map(i => (
+                                    <div key={i} className="h-10 bg-slate-200 dark:bg-white/5 rounded-lg animate-pulse" />
+                                  ))}
+                                </div>
+                              );
+                            }
                             return <p className="text-xs text-slate-500 text-center py-4">No recent chats.</p>;
                           }
                           const sortedChats = [...uniqueChats].sort((a, b) => {
@@ -2243,7 +3093,7 @@ export default function App() {
 
               <div className="flex items-center space-x-3">
                 <button 
-                  onClick={() => alert("Deployment pipeline initiated...")}
+                  onClick={() => setIsDeployModalOpen(true)}
                   className="flex items-center space-x-2 px-4 py-1.5 bg-blue-600 hover:bg-blue-500 text-white rounded-lg text-xs font-semibold transition-all shadow-lg shadow-blue-600/20"
                 >
                   <Rocket className="w-3.5 h-3.5" />
@@ -2632,11 +3482,12 @@ export default function App() {
               /* Regular Chat body (Messages & inputs) */
               <>
                 <div 
+                  ref={chatContainerRef}
                   className={cn(
                     "flex-1 p-6 space-y-6 custom-scrollbar flex flex-col items-center",
                     project.messages.length === 0 ? "overflow-hidden" : "overflow-y-auto"
                   )} 
-                  style={{ paddingBottom: project.messages.length === 0 ? '0px' : (isMobile ? (activeProject !== null ? '210px' : '160px') : '120px') }}
+                  style={{ paddingBottom: isMobile && isMobileLogsOpen ? '280px' : isMobile ? '20px' : '0' }}
                 >
                   <div className={cn("w-full max-w-4xl flex-1 flex flex-col justify-start space-y-6", project.messages.length === 0 && "h-full justify-center")}>
                     {project.messages.length === 0 ? (
@@ -2748,24 +3599,21 @@ export default function App() {
                           )}
                           
                             {msg.role === 'assistant' && msg.steps && msg.steps.length > 0 && showSteps && (
-                            <div className="w-[90%] space-y-2 mb-4">
-                              {msg.steps.map(step => (
-                                <div key={step.id} className="flex items-center space-x-3 text-[11px] font-medium">
-                                  <div className={cn(
-                                    "w-1.5 h-1.5 rounded-full",
-                                    step.status === 'running' ? "bg-blue-500 animate-pulse" : 
-                                    step.status === 'pending' ? "bg-slate-300 dark:bg-slate-700" :
-                                    "bg-green-500"
-                                  )} />
-                                  <span className={cn(
-                                    step.status === 'running' ? "text-blue-500" : 
-                                    step.status === 'pending' ? "text-slate-400 dark:text-slate-500" :
-                                    "text-slate-500 dark:text-slate-400"
-                                  )}>{step.label}</span>
+                              <CollapsibleStepsContainer 
+                                steps={msg.steps} 
+                                isGeneratingOrExecuting={isGenerating || (isLast && project.status === 'executing')} 
+                              />
+                            )}
+
+                            {msg.role === 'assistant' && msg.error && (
+                              <div className="w-[95%] sm:w-[90%] border border-red-200/60 dark:border-red-950/40 rounded-2xl bg-red-50/50 dark:bg-red-950/10 p-4 mb-4 transition-all flex items-start space-x-3 text-xs text-red-600 dark:text-red-400">
+                                <span className="text-sm shrink-0">⚠️</span>
+                                <div className="space-y-1 flex-1">
+                                  <div className="font-semibold text-red-700 dark:text-red-300">Execution Error Encountered</div>
+                                  <div className="font-mono text-[11px] leading-relaxed break-all whitespace-pre-wrap">{msg.error}</div>
                                 </div>
-                              ))}
-                            </div>
-                          )}
+                              </div>
+                            )}
 
                             <div className={cn(
                               "text-sm leading-relaxed text-left transition-all w-full max-w-full",
@@ -2796,11 +3644,21 @@ export default function App() {
                                 {/* Model Identity Badge */}
                                 <div className="flex items-center space-x-2">
                                   {msg.modelId ? (
-                                    <div className="flex items-center space-x-1.5 px-2 py-0.5 rounded-full bg-slate-100 dark:bg-white/5 border border-slate-200 dark:border-white/5 font-mono text-[9px] font-bold text-slate-500 shadow-sm cursor-help transition-all hover:bg-slate-200 dark:hover:bg-white/10" title={`Model: ${msg.modelId}\nPlatform: ${msg.providerPlatform}`}>
-                                      <Cpu className="w-3 h-3 text-blue-500" />
-                                      <span className="uppercase tracking-wider">
-                                        {msg.providerName || (msg.modelId.includes('gemini') ? 'GOOGLE' : 'AI MODEL')}
-                                      </span>
+                                    <div className="flex items-center space-x-1.5 flex-wrap gap-y-1">
+                                      <div className="flex items-center space-x-1.5 px-2 py-0.5 rounded-full bg-slate-100 dark:bg-white/5 border border-slate-200 dark:border-white/5 font-mono text-[9px] font-bold text-slate-500 shadow-sm cursor-help transition-all hover:bg-slate-200 dark:hover:bg-white/10" title={`Model: ${msg.modelId}\nPlatform: ${msg.providerPlatform}`}>
+                                        <Cpu className="w-3 h-3 text-blue-500" />
+                                        <span className="uppercase tracking-wider">
+                                          {msg.providerName || (msg.modelId.includes('gemini') ? 'GOOGLE' : 'AI MODEL')}
+                                        </span>
+                                      </div>
+                                      {msg.latency && (
+                                        <div className="text-[9px] font-mono font-bold text-blue-500 bg-blue-500/5 dark:bg-blue-500/10 px-2 py-0.5 rounded-full border border-blue-500/10">
+                                          ⚡ {msg.latency}ms
+                                        </div>
+                                      )}
+                                      <div className={`text-[9px] font-mono font-bold px-2 py-0.5 rounded-full border ${msg.byok ? 'text-green-500 bg-green-500/5 dark:bg-green-500/10 border-green-500/15' : 'text-purple-500 bg-purple-500/5 dark:bg-purple-500/10 border-purple-500/15'}`}>
+                                        {msg.byok ? "BYOK key" : "Shared Mesh key"}
+                                      </div>
                                     </div>
                                   ) : (
                                     <div className="flex items-center space-x-1.5 px-2 py-0.5 rounded-full bg-slate-100 dark:bg-white/5 border border-slate-200 dark:border-white/5 font-mono text-[9px] font-bold text-slate-500 shadow-sm">
@@ -2819,7 +3677,7 @@ export default function App() {
                                     onClick={() => handleMessageFeedback(msg.id, 'up', msg.content)}
                                     className={cn(
                                       "p-1.5 rounded-md transition-all", 
-                                      messageFeedbacks[msg.id] === 'up' ? "bg-green-500/20 text-green-500 scale-110" : "hover:bg-slate-100 dark:hover:bg-white/10"
+                                      (msg.feedback === 'up' || messageFeedbacks[msg.id] === 'up') ? "bg-green-500/20 text-green-500 scale-110" : "hover:bg-slate-100 dark:hover:bg-white/10"
                                     )} 
                                     title="Good response"
                                   >
@@ -2829,7 +3687,7 @@ export default function App() {
                                     onClick={() => handleMessageFeedback(msg.id, 'down', msg.content)}
                                     className={cn(
                                       "p-1.5 rounded-md transition-all", 
-                                      messageFeedbacks[msg.id] === 'down' ? "bg-red-500/20 text-red-500 scale-110" : "hover:bg-slate-100 dark:hover:bg-white/10"
+                                      (msg.feedback === 'down' || messageFeedbacks[msg.id] === 'down') ? "bg-red-500/20 text-red-500 scale-110" : "hover:bg-slate-100 dark:hover:bg-white/10"
                                     )} 
                                     title="Bad response"
                                   >
@@ -2887,6 +3745,19 @@ export default function App() {
                         </div>
                       </div>
                     )}
+                    {project.status === 'executing' && (
+                      <div className="flex justify-start">
+                        <div className="bg-blue-50 dark:bg-blue-900/10 border border-blue-100 dark:border-blue-500/20 p-4 rounded-2xl rounded-tl-none">
+                          <div className="flex items-center space-x-3">
+                            <Loader2 className="w-4 h-4 text-blue-500 animate-spin" />
+                            <span className="text-xs font-semibold text-blue-600 dark:text-blue-400">
+                              Autonomous Agent actively executing workspace updates...
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+                    <div ref={chatEndRef} className="h-2" />
                   </div>
                 </div>
                 
@@ -2934,17 +3805,21 @@ export default function App() {
                     {/* Elegant input box with embedded toolbars */}
                     <div className="bg-slate-100 dark:bg-white/5 border border-slate-200 dark:border-white/10 rounded-2xl p-2.5 focus-within:border-blue-500/50 transition-all flex flex-col relative group">
                       <textarea 
+                        ref={inputRef}
                         rows={2}
                         value={chatInput}
                         onChange={(e) => setChatInput(e.target.value)}
                         onKeyDown={(e) => {
                           if (e.key === 'Enter' && !e.shiftKey) {
                             e.preventDefault();
-                            handleSendMessage();
+                            if (project.status !== 'generating' && project.status !== 'executing') {
+                              handleSendMessage();
+                            }
                           }
                         }}
-                        placeholder="Ask Omni to build something..."
-                        className="w-full bg-transparent border-none px-3.5 py-2 text-sm focus:outline-none resize-none custom-scrollbar text-slate-900 dark:text-white pb-12"
+                        placeholder={project.status === 'generating' ? "Generating code..." : project.status === 'executing' ? "Executing tasks..." : "Ask Omni to build something..."}
+                        disabled={project.status === 'generating' || project.status === 'executing'}
+                        className="w-full bg-transparent border-none px-3.5 py-2 text-sm focus:outline-none resize-none custom-scrollbar text-slate-900 dark:text-white pb-12 disabled:opacity-60"
                       />
 
 
@@ -3002,6 +3877,14 @@ export default function App() {
                               title="Stop generating"
                             >
                               <Square className="w-3.5 h-3.5 fill-white text-white" />
+                            </button>
+                          ) : project.status === 'executing' ? (
+                            <button 
+                              disabled
+                              className="p-1.5 bg-blue-600/50 text-white rounded-xl transition-all shrink-0 cursor-not-allowed"
+                              title="Executing workspace updates..."
+                            >
+                              <Loader2 className="w-3.5 h-3.5 animate-spin" />
                             </button>
                           ) : (
                             <button 

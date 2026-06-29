@@ -1,6 +1,10 @@
 import { OmniBrain } from "./brain";
 import fs from "fs/promises";
 import path from "path";
+import { exec } from "child_process";
+import { promisify } from "util";
+
+const execAsync = promisify(exec);
 
 /**
  * Orchestrator - The Agent Coordinator
@@ -24,6 +28,7 @@ export class Orchestrator {
     localTime?: string;
     timezone?: string;
     projectId?: string;
+    userId?: string;
   }) {
     const { 
       message, 
@@ -35,7 +40,8 @@ export class Orchestrator {
       userDisplayName,
       localTime,
       timezone,
-      projectId
+      projectId,
+      userId
     } = payload;
     
     // Pass modelId and user context to brain
@@ -86,6 +92,7 @@ export class Orchestrator {
       localTime?: string;
       timezone?: string;
       projectId?: string;
+      userId?: string;
     }, 
     onChunk: (chunk: any) => void
   ) {
@@ -99,7 +106,8 @@ export class Orchestrator {
       userDisplayName,
       localTime,
       timezone,
-      projectId
+      projectId,
+      userId
     } = payload;
     
     let fullResponse = "";
@@ -116,7 +124,9 @@ export class Orchestrator {
       userEmail,
       userDisplayName,
       localTime,
-      timezone
+      timezone,
+      projectId,
+      userId
     );
     
     // Once stream finishes, apply files & run commands in the background
@@ -162,8 +172,6 @@ export class Orchestrator {
     const fileRegex = /<file\s+path="([^"]+)">([\s\S]*?)<\/file>/g;
     let match;
 
-    const fs = require('fs/promises');
-    const path = require('path');
     let baseDir = process.cwd();
     if (projectId && projectId !== 'null') {
       baseDir = path.join(process.cwd(), '.projects', projectId);
@@ -189,9 +197,6 @@ export class Orchestrator {
     // Process commands as well
     const cmdRegex = /<command>([\s\S]*?)<\/command>/g;
     let cmdMatch;
-    const { exec } = require('child_process');
-    const util = require('util');
-    const execAsync = util.promisify(exec);
 
     while ((cmdMatch = cmdRegex.exec(content)) !== null) {
       const command = cmdMatch[1].trim();

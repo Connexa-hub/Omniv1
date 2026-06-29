@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { 
   Terminal,
   ExternalLink,
@@ -13,6 +13,77 @@ import rehypeKatex from 'rehype-katex';
 
 function cn(...classes: any[]) {
   return classes.filter(Boolean).join(' ');
+}
+
+// Mermaid diagram component
+const MermaidDiagram: React.FC<{ code: string }> = ({ code }) => {
+  const ref = useRef(null);
+  const [svg, setSvg] = useState('');
+  const [error, setError] = useState('');
+  const id = useRef(`mermaid-${Math.random().toString(36).slice(2)}`);
+
+  useEffect(() => {
+    let cancelled = false;
+    const renderDiagram = async () => {
+      try {
+        const mermaid = (await import('mermaid')).default;
+        mermaid.initialize({ 
+          startOnLoad: false,
+          theme: document.documentElement.classList.contains('dark') ? 'dark' : 'default',
+          securityLevel: 'loose',
+          fontFamily: 'Space Grotesk, system-ui',
+        });
+        const { svg } = await mermaid.render(id.current, code.trim());
+        if (!cancelled) setSvg(svg);
+      } catch (e: any) {
+        if (!cancelled) setError(e.message || 'Diagram render failed');
+      }
+    };
+    renderDiagram();
+    return () => { cancelled = true; };
+  }, [code]);
+
+  if (error) {
+    return (
+      <div className="my-4 border border-red-500/20 bg-red-500/5 rounded-xl p-4 overflow-hidden">
+        <div className="text-red-500 text-xs font-mono font-bold mb-2">Diagram error: {error}</div>
+        <pre className="text-[10px] text-slate-500 overflow-x-auto">{code}</pre>
+      </div>
+    );
+  }
+
+  if (!svg) {
+    return (
+      <div className="my-4 flex items-center justify-center p-8 border border-white/5 bg-white/2 rounded-xl">
+        <div className="text-sm font-medium text-slate-400 animate-pulse flex items-center gap-2">
+          <Zap className="w-4 h-4 text-blue-500" /> Rendering diagram...
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="my-4 relative group">
+      <div 
+        className="w-full bg-white dark:bg-slate-900 border border-slate-200 dark:border-white/10 rounded-xl p-4 overflow-x-auto custom-scrollbar flex items-center justify-center min-h-[100px]"
+        dangerouslySetInnerHTML={{ __html: svg }}
+      />
+      <div className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-2">
+        <button
+          onClick={() => {
+            const blob = new Blob([svg], { type: 'image/svg+xml' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url; a.download = 'diagram.svg'; a.click();
+            URL.revokeObjectURL(url);
+          }}
+          className="text-[10px] text-slate-400 hover:text-slate-600 dark:hover:text-slate-300 font-mono flex items-center gap-1 transition-colors px-2 py-1 bg-white/50 dark:bg-black/50 backdrop-blur-md rounded-md border border-slate-200 dark:border-white/10"
+        >
+          ↓ Download SVG
+        </button>
+      </div>
+    </div>
+  );
 }
 
 interface TextbookMessageContentProps {
@@ -185,63 +256,140 @@ export default function TextbookMessageContent({
         </div>
       )}
 
-      {cleanContent.trim().length > 0 && (
-        <div className="prose prose-slate dark:prose-invert max-w-none text-slate-800 dark:text-slate-200 markdown-body">
-          <ReactMarkdown
-            remarkPlugins={[remarkGfm, remarkMath]}
-            rehypePlugins={[rehypeKatex]}
-            components={{
-            code({ node, inline, className, children, ...props }: any) {
-              const match = /language-(\w+)/.exec(className || '');
-              return !inline && match ? (
-                <CodeBlockRenderer code={String(children).replace(/\n$/, '')} language={match[1]} />
-              ) : (
-                <code className="px-1.5 py-0.5 bg-slate-100 dark:bg-white/5 border border-slate-250 dark:border-white/10 rounded font-mono text-xs text-blue-600 dark:text-blue-400 font-semibold mx-0.5" {...props}>
-                  {children}
-                </code>
-              );
-            },
-            table({ children }) {
-              return (
-                <div className="my-4 overflow-x-auto border border-slate-200 dark:border-white/5 rounded-xl bg-white dark:bg-white/1 shadow-sm">
-                  <table className="w-full text-left border-collapse text-xs">
+      {cleanContent.trim().length > 0 && (() => {
+        // Check for mermaid blocks: ```mermaid ... ```
+        const mermaidRegex = /```mermaid\n([\s\S]*?)```/g;
+        const hasMermaid = mermaidRegex.test(cleanContent);
+
+        if (hasMermaid) {
+          const parts = cleanContent.split(/(```mermaid\n[\s\S]*?```)/g);
+          return (
+            <div className="prose prose-slate dark:prose-invert max-w-none text-slate-800 dark:text-slate-200 markdown-body">
+              {parts.map((part, i) => {
+                const mermaidMatch = part.match(/```mermaid\n([\s\S]*?)```/);
+                if (mermaidMatch) {
+                  return <MermaidDiagram key={i} code={mermaidMatch[1]} />;
+                }
+                if (!part.trim()) return null;
+                return (
+                  <ReactMarkdown
+                    key={i}
+                    remarkPlugins={[remarkGfm, remarkMath]}
+                    rehypePlugins={[rehypeKatex]}
+                    components={{
+                      code({ node, inline, className, children, ...props }: any) {
+                        const match = /language-(\w+)/.exec(className || '');
+                        return !inline && match ? (
+                          <CodeBlockRenderer code={String(children).replace(/\n$/, '')} language={match[1]} />
+                        ) : (
+                          <code className="px-1.5 py-0.5 bg-slate-100 dark:bg-white/5 border border-slate-250 dark:border-white/10 rounded font-mono text-xs text-blue-600 dark:text-blue-400 font-semibold mx-0.5" {...props}>
+                            {children}
+                          </code>
+                        );
+                      },
+                      table({ children }) {
+                        return (
+                          <div className="my-4 overflow-x-auto border border-slate-200 dark:border-white/5 rounded-xl bg-white dark:bg-white/1 shadow-sm">
+                            <table className="w-full text-left border-collapse text-xs">
+                              {children}
+                            </table>
+                          </div>
+                        );
+                      },
+                      thead({ children }) {
+                        return <thead className="bg-slate-50 dark:bg-white/2 border-b border-slate-200 dark:border-white/5 font-bold text-slate-800 dark:text-slate-200 font-sans">{children}</thead>;
+                      },
+                      tbody({ children }) {
+                        return <tbody className="divide-y divide-slate-100 dark:divide-white/2">{children}</tbody>;
+                      },
+                      tr({ children }) {
+                        return <tr className="hover:bg-slate-50/50 dark:hover:bg-white/1 transition-colors">{children}</tr>;
+                      },
+                      th({ children }) {
+                        return <th className="px-4 py-3 font-semibold">{children}</th>;
+                      },
+                      td({ children }) {
+                        return <td className="px-4 py-2.5 text-slate-700 dark:text-slate-300 font-medium">{children}</td>;
+                      },
+                      blockquote({ children }) {
+                        return <blockquote className="my-4 pl-4 border-l-4 border-blue-500 bg-blue-500/5 py-3 pr-4 rounded-r-xl text-sm italic text-slate-700 dark:text-slate-300">{children}</blockquote>;
+                      },
+                      a({ children, href }) {
+                        return (
+                          <a href={href} target="_blank" rel="noopener noreferrer" className="text-blue-650 dark:text-blue-400 font-bold underline hover:text-blue-500 inline-flex items-center gap-0.5 transition-colors">
+                            {children}
+                            <ExternalLink className="w-2.5 h-2.5" />
+                          </a>
+                        );
+                      }
+                    }}
+                  >
+                    {part}
+                  </ReactMarkdown>
+                );
+              })}
+            </div>
+          );
+        }
+
+        return (
+          <div className="prose prose-slate dark:prose-invert max-w-none text-slate-800 dark:text-slate-200 markdown-body">
+            <ReactMarkdown
+              remarkPlugins={[remarkGfm, remarkMath]}
+              rehypePlugins={[rehypeKatex]}
+              components={{
+              code({ node, inline, className, children, ...props }: any) {
+                const match = /language-(\w+)/.exec(className || '');
+                return !inline && match ? (
+                  <CodeBlockRenderer code={String(children).replace(/\n$/, '')} language={match[1]} />
+                ) : (
+                  <code className="px-1.5 py-0.5 bg-slate-100 dark:bg-white/5 border border-slate-250 dark:border-white/10 rounded font-mono text-xs text-blue-600 dark:text-blue-400 font-semibold mx-0.5" {...props}>
                     {children}
-                  </table>
-                </div>
-              );
-            },
-            thead({ children }) {
-              return <thead className="bg-slate-50 dark:bg-white/2 border-b border-slate-200 dark:border-white/5 font-bold text-slate-800 dark:text-slate-200 font-sans">{children}</thead>;
-            },
-            tbody({ children }) {
-              return <tbody className="divide-y divide-slate-100 dark:divide-white/2">{children}</tbody>;
-            },
-            tr({ children }) {
-              return <tr className="hover:bg-slate-50/50 dark:hover:bg-white/1 transition-colors">{children}</tr>;
-            },
-            th({ children }) {
-              return <th className="px-4 py-3 font-semibold">{children}</th>;
-            },
-            td({ children }) {
-              return <td className="px-4 py-2.5 text-slate-700 dark:text-slate-300 font-medium">{children}</td>;
-            },
-            blockquote({ children }) {
-              return <blockquote className="my-4 pl-4 border-l-4 border-blue-500 bg-blue-500/5 py-3 pr-4 rounded-r-xl text-sm italic text-slate-700 dark:text-slate-300">{children}</blockquote>;
-            },
-            a({ children, href }) {
-              return (
-                <a href={href} target="_blank" rel="noopener noreferrer" className="text-blue-650 dark:text-blue-400 font-bold underline hover:text-blue-500 inline-flex items-center gap-0.5 transition-colors">
-                  {children}
-                  <ExternalLink className="w-2.5 h-2.5" />
-                </a>
-              );
-            }
-          }}
-        >
-          {cleanContent}
-        </ReactMarkdown>
-      </div>
-      )}
+                  </code>
+                );
+              },
+              table({ children }) {
+                return (
+                  <div className="my-4 overflow-x-auto border border-slate-200 dark:border-white/5 rounded-xl bg-white dark:bg-white/1 shadow-sm">
+                    <table className="w-full text-left border-collapse text-xs">
+                      {children}
+                    </table>
+                  </div>
+                );
+              },
+              thead({ children }) {
+                return <thead className="bg-slate-50 dark:bg-white/2 border-b border-slate-200 dark:border-white/5 font-bold text-slate-800 dark:text-slate-200 font-sans">{children}</thead>;
+              },
+              tbody({ children }) {
+                return <tbody className="divide-y divide-slate-100 dark:divide-white/2">{children}</tbody>;
+              },
+              tr({ children }) {
+                return <tr className="hover:bg-slate-50/50 dark:hover:bg-white/1 transition-colors">{children}</tr>;
+              },
+              th({ children }) {
+                return <th className="px-4 py-3 font-semibold">{children}</th>;
+              },
+              td({ children }) {
+                return <td className="px-4 py-2.5 text-slate-700 dark:text-slate-300 font-medium">{children}</td>;
+              },
+              blockquote({ children }) {
+                return <blockquote className="my-4 pl-4 border-l-4 border-blue-500 bg-blue-500/5 py-3 pr-4 rounded-r-xl text-sm italic text-slate-700 dark:text-slate-300">{children}</blockquote>;
+              },
+              a({ children, href }) {
+                return (
+                  <a href={href} target="_blank" rel="noopener noreferrer" className="text-blue-650 dark:text-blue-400 font-bold underline hover:text-blue-500 inline-flex items-center gap-0.5 transition-colors">
+                    {children}
+                    <ExternalLink className="w-2.5 h-2.5" />
+                  </a>
+                );
+              }
+            }}
+          >
+            {cleanContent}
+          </ReactMarkdown>
+        </div>
+        );
+      })()}
 
       {suggestions && suggestions.length > 0 && (
         <div className="pt-2 border-t border-slate-100 dark:border-white/5">

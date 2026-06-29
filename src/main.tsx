@@ -7,15 +7,19 @@ import './index.css';
 
 // Test connection on boot
 async function testConnection() {
+  console.log("Firebase Config:", {
+    projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID,
+    databaseId: import.meta.env.VITE_FIREBASE_DATABASE_ID,
+  });
   try {
     // Attempt to reach the test collection
     await getDocFromServer(doc(db, 'test', 'connection'));
     console.log("Omni Backend Connected");
   } catch (error) {
     if (error instanceof Error && error.message.includes('the client is offline')) {
-      console.error("Omni Backend Offline: Check configuration.");
+      console.warn("Omni Backend Offline: Operating in offline mode. Cache enabled.");
     } else {
-      console.error("Omni Backend Connection Issue:", error);
+      console.warn("Omni Backend Connection Info (Offline Mode):", error);
     }
   }
 }

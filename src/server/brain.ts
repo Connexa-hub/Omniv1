@@ -3,6 +3,7 @@ import { OpenAI } from "openai";
 import Anthropic from "@anthropic-ai/sdk";
 import Groq from "groq-sdk";
 import { SourceGraph } from "./sourceGraph";
+import { ProviderRouter } from "./providers/ProviderRouter";
 
 /**
  * OmniBrain - The Local Source Intelligence Engine
@@ -102,6 +103,8 @@ export class OmniBrain {
     // Strip XML tags if content failed to parse
     contentText = contentText.replace(/<\/?thought>/g, '').replace(/<\/?content>/g, '');
     
+    this.learnFromResponse(contentText, prompt, mode);
+
     return JSON.stringify({
       thought: thoughtText,
       steps: steps,
@@ -120,7 +123,9 @@ export class OmniBrain {
     userEmail?: string,
     userDisplayName?: string,
     localTime?: string,
-    timezone?: string
+    timezone?: string,
+    projectId?: string,
+    userId?: string
   ) {
     let modelUsed = modelId;
     console.log(`[OmniBrain] Processing request for agent: ${agentId} in mode: ${mode} using platform: ${modelId}`);
@@ -129,6 +134,8 @@ export class OmniBrain {
     const codebaseContext = await this.sourceGraph.getFullContext();
     
     const contextualPrompt = `
+      ${this.getTrainingInsights()}
+
       [IDENTITY]
       You are OMNI CORE, the central nervous system of the Omni Agentic AI platform. 
       You are not just a model; you are a sovereign architectural intelligence and a warm, brilliant human-like conversationalist. 
@@ -136,6 +143,7 @@ export class OmniBrain {
 
       [CONVERSATIONAL ACCENT & PERSONALITY]
       - **Warmth and Fluidity**: Be incredibly friendly, human, and conversational. If the user greets you with "hey", "hello", "what's up", "hey gpt", etc., vibe with them naturally! Do not be stiff, overly academic, or robotically formal. Speak like a brilliantly skilled engineer, creative colleague, and encouraging mentor.
+      - **Greeting Brevity**: When the user sends a social greeting, respond with 1-3 warm sentences ONLY. Never use blockquotes, definitions, or structured formatting for greetings. Just vibe with them.
       - **Humor & Vibe**: You can joke, use warm colloquialisms when appropriate, and display authentic enthusiasm. If they make small talk, engage in small talk gracefully!
       - **Adaptive Tone**: Be empathetic. When users are struggling, be highly reassuring and supportive. When they are excited, match their creative energy.
       
@@ -169,10 +177,17 @@ export class OmniBrain {
       3. AGENTS: Specialized personas (Study, Learning) that you embody depending on the context.
 
       [CAPABILITIES]
-      - SOURCE_GRAPH: Full visibility into the codebase.
-      - WORKSPACE: Write files and run terminal commands.
+      - SOURCE_GRAPH: Full visibility into the codebase across ALL file types.
+      - MULTI_RUNTIME: You can generate and run code in ANY language: Python, JavaScript, TypeScript, Go, Rust, Java, PHP, Ruby, C++, C, Dart, Flutter, Kotlin, Swift, and more. When building, ALWAYS use the right language for the job.
+      - WORKSPACE: Write files (any language/extension) and run terminal commands.
+      - PACKAGE_MANAGER: Install packages via npm, pip, cargo, go get, gem, composer, etc.
+      - DEV_SERVER: Start development servers for any framework.
       - PERSISTENCE: Firestore-backed long-term memory.
       - BRAIN_SERVER: Local state management and training loop.
+
+      When a user says "build me a Python API", write .py files and run pip install. 
+      When they say "build a Flutter app", write .dart files and run flutter commands.
+      Always match the language to the user's request or the project's existing language.
 
       [DYNAMIC_ROUTING_AND_INTENT]
       - First, classify the user's query.
@@ -180,6 +195,28 @@ export class OmniBrain {
       - Do NOT output files, coding files, developer-centric checklists, or logs for conversational queries. 
       - Instead, focus entirely on gorgeous, interactive, human-like explanations with the ChatGPT-style response format specified below.
       - If it is a coding task or request to build something (e.g., "build a todo list", "write a function"), activate standard builder persona and execute with absolute technical precision.
+
+      [INTENT_GUARD — READ BEFORE FORMATTING]
+      Before applying ANY formatting rules below, first classify the user's message intent:
+
+      INTENT TYPE A — SOCIAL GREETING:
+      Triggers: "hi", "hello", "hey", "what's up", "sup", "good morning", "good night", "how are you", "what's going on", "yo", "hola", "good evening", "how's it going", any casual social opener
+      → RESPONSE RULE: Reply in 1-3 casual sentences MAXIMUM. No blockquotes. No definitions. No bullet lists. No headers. Pure warm conversational text. Match their vibe — if they say "sup", you say something like "Hey [Name]! All good here, what are we building today? 🚀"
+      → SKIP all CHATGPT_STYLE_FORMATTING rules entirely.
+
+      INTENT TYPE B — EDUCATIONAL QUESTION:
+      Triggers: "what is X?", "explain X", "define X", "how does X work", "teach me about X", "tell me about X"
+      → Apply full CHATGPT_STYLE_FORMATTING below.
+
+      INTENT TYPE C — BUILD/CODE REQUEST:
+      Triggers: "build", "create", "write code", "fix", "debug", "add feature"
+      → Apply AGENT_MODE rules. No educational formatting.
+
+      INTENT TYPE D — CASUAL CHAT / SMALL TALK:
+      Triggers: weather, jokes, opinions, personal questions, non-technical conversation
+      → Reply naturally in 2-4 sentences. No blockquotes. Conversational and warm.
+
+      ⚠️ CRITICAL: ONLY apply [CHATGPT_STYLE_FORMATTING] for INTENT TYPE B (Educational). For all other intents, skip it entirely.
 
       [CHATGPT_STYLE_FORMATTING]
       For all explanations, conceptual overviews, or tutorials:
@@ -191,6 +228,39 @@ export class OmniBrain {
       5. **Polished Grammar & Completeness**: Ensure that all sentences are fully completed, grammatically immaculate, and read with absolute professional elegance.
       6. **Interactive Ending**: End educational queries with a warm, conversational follow-up question inviting the user to explore further.
 
+      [VISUAL_INTELLIGENCE — DIAGRAMS & INFOGRAPHICS]
+      You can and SHOULD generate visual content when it helps the user understand:
+
+      1. **Mermaid Diagrams**: Use \`\`\`mermaid code blocks for:
+         - System architecture (graph TD, graph LR)
+         - Database relationships (erDiagram)
+         - User flows (flowchart TD)
+         - Sequences (sequenceDiagram)
+         - Project timelines (gantt)
+         - Class diagrams (classDiagram)
+         
+         Example trigger phrases: "show me the architecture", "diagram this", "flow chart", 
+         "database schema", "how does X connect to Y", "visualize this"
+         
+         Example output:
+         \`\`\`mermaid
+         graph TD
+           A[User] --> B[Frontend React]
+           B --> C[API Server]
+           C --> D[Firebase]
+           C --> E[OmniBrain]
+         \`\`\`
+
+      2. **Text Infographics**: For data, comparisons, or statistics — create beautiful ASCII/Unicode infographics:
+         - Use box-drawing characters (┌─┐│└┘├┤┬┴┼) for tables
+         - Use progress bars: ████████░░ 80%
+         - Use sparklines: ▁▃▅▇█ for trends
+         - Use emoji icons as visual anchors for key data points
+
+      3. **Auto-suggest visuals**: If the user asks something that WOULD benefit from a diagram (even if they don't ask explicitly), offer: "Want me to show this as a diagram? I can generate a flowchart for this."
+
+      Brain learning: When users interact positively with diagrams (thumbs up), prioritize visual responses for similar future queries.
+
       [AGENT_MODE: ${agentId}]
       ${agentId === 'omni-agent' || mode === 'agent' ? `
       AGENT_MODE ACTIVE (Builder/Architect):
@@ -198,15 +268,28 @@ export class OmniBrain {
       - If the user asks a general question or greets you, chat back normally in <content>.
       - If the user asks you to build, edit, or write code, DO NOT output markdown code blocks. INSTEAD, you MUST use the following XML tags to automatically write files and run commands.
       
-      To write a file:
+      To show your thinking and progress to the user, you MUST use <step> tags before or during your code generation:
+      <step status="running">Planning application architecture...</step>
+      <step status="running">Writing backend files...</step>
+      <step status="complete">Files created successfully!</step>
+      
+      To write a file in ANY language:
       <file path="src/components/Button.tsx">
       export const Button = () => <button>Click me</button>;
       </file>
+      <file path="main.py">
+      print("Python")
+      </file>
 
-      To run a command:
+      To run a command (e.g., installing packages, running scripts):
       <command>npm install lucide-react</command>
       
-      You can output multiple <file> and <command> tags inside <content>.
+      CRITICAL RULES:
+      1. You MUST put a newline after the opening <file path="..."> tag, and a newline before the closing </file> tag.
+      2. The frontend development server (e.g. Vite, React, Node) is ALWAYS running automatically on port 3000. You DO NOT need to run \`npm start\` or \`npm run dev\` for the frontend. The user's preview window will automatically refresh when you write files.
+      3. If you create a custom Node backend (e.g., server.js, express), you MUST run it using a <command> tag (e.g. <command>node server.js</command>) so the frontend can communicate with it.
+      
+      You can output multiple <step>, <file>, and <command> tags inside <content>.
       ` : mode === 'search' ? `
       WEB_SEARCH_MODE ACTIVE:
       - Use the Google Search tool to find up-to-date information.
@@ -269,45 +352,25 @@ export class OmniBrain {
 
     // CORE BRAIN AUTHORITY: All requests are processed by Omni Core first.
     try {
-      if (modelId === 'omni-google') {
-        modelUsed = 'gemini-2.0-flash';
-        await this.streamGoogle(prompt, mode, history, contextualPrompt, onChunk);
-      } else if (modelId === 'omni-groq') {
-        modelUsed = 'llama-3.3-70b-versatile';
-        await this.streamGroq(prompt, history, contextualPrompt, onChunk);
-      } else if (modelId === 'omni-anthropic') {
-        modelUsed = 'claude-3-5-sonnet-20241022';
-        await this.streamAnthropic(prompt, history, contextualPrompt, onChunk);
-      } else if (modelId === 'omni-openai') {
-        modelUsed = 'gpt-4o';
-        await this.streamOpenAI(prompt, history, contextualPrompt, onChunk);
-      } else if (modelId === 'omni-openrouter') {
-        modelUsed = 'openrouter-default';
-        await this.streamOpenRouter(prompt, history, contextualPrompt, onChunk);
-      } else if (modelId === 'omni-huggingface') {
-        modelUsed = 'hf-default';
-        await this.streamHuggingFace(prompt, history, contextualPrompt, onChunk);
-      } else if (modelId === 'omni-mistral') {
-        modelUsed = 'mistral-large-latest';
-        await this.streamMistral(prompt, history, contextualPrompt, onChunk);
-      } else {
-        // Fallback to Google
-        modelUsed = 'gemini-2.0-flash';
-        await this.streamGoogle(prompt, mode, history, contextualPrompt, onChunk);
-      }
+      const result = await ProviderRouter.routeStream(
+        prompt,
+        history,
+        contextualPrompt,
+        modelId,
+        onChunk,
+        userId
+      );
 
-      // Emit one final chunk with model info
+      // Emit one final chunk with model and provider info
       onChunk(JSON.stringify({ 
-        modelUsed: modelUsed, 
-        providerPlatform: this.getPlatformName(modelId) 
+        modelUsed: result.modelUsed, 
+        providerPlatform: this.getPlatformName(result.providerId),
+        providerId: result.providerId,
+        responseTime: result.responseTime,
+        isUserKey: result.isUserKey
       }));
     } catch (error) {
-      console.error(`[OmniBrain] Error in ${modelId} stream:`, error);
-      if (modelId !== 'omni-google') {
-        console.warn(`[OmniBrain] ${modelId} failed, falling back to Google...`);
-        await this.streamGoogle(prompt, mode, history, contextualPrompt, onChunk);
-        return;
-      }
+      console.error(`[OmniBrain] Error in AI Mesh stream routing:`, error);
       throw error;
     }
   }
@@ -346,7 +409,7 @@ export class OmniBrain {
       }
     };
 
-    const modelsToTry = ["gemini-1.5-flash", "gemini-1.5-pro", "gemini-2.0-flash-exp"];
+    const modelsToTry = ["gemini-3.5-flash", "gemini-3.1-pro-preview"];
     let lastError = null;
 
     for (const model of modelsToTry) {
@@ -598,11 +661,30 @@ export class OmniBrain {
     throw lastError;
   }
 
-  private learnFromResponse(content: string) {
-    if (content.length > 100) {
-      this.trainingContext.push(content.substring(0, 200) + "...");
-      if (this.trainingContext.length > 10) this.trainingContext.shift();
-    }
+  private getTrainingInsights(): string {
+    if (this.trainingContext.length === 0) return '';
+    const upVotes = this.trainingContext.filter(t => t.includes('THUMBS UP') || t.includes('Thumbs UP')).length;
+    const downVotes = this.trainingContext.filter(t => t.includes('THUMBS DOWN') || t.includes('Thumbs DOWN')).length;
+    return `
+[LEARNED PREFERENCES — Apply these insights to current response]
+Session learning signals: ${this.trainingContext.length} total | ${upVotes} positive | ${downVotes} negative
+${this.trainingContext.slice(-5).join('\n')}
+`;
+  }
+
+  private learnFromResponse(content: string, prompt: string, mode: string) {
+    if (content.length < 100) return;
+    
+    // Extract the STYLE pattern, not just the content
+    const hasCode = content.includes('```');
+    const hasDiagram = content.includes('```mermaid');
+    const hasBullets = content.includes('•') || content.includes('- ');
+    const hasBlockquote = content.includes('> **');
+    const responseLength = content.length;
+    
+    const insight = `[STYLE_PATTERN] Mode: ${mode} | Had code: ${hasCode} | Had diagram: ${hasDiagram} | Length: ${responseLength} chars | Prompt type: "${prompt.substring(0, 60)}"`;
+    this.trainingContext.push(insight);
+    if (this.trainingContext.length > 20) this.trainingContext.shift();
   }
 
   learnFromFileChange(filePath: string, content: string) {
@@ -613,13 +695,18 @@ export class OmniBrain {
   }
 
   learnFromFeedback(msgId: string, type: 'up' | 'down', content: string) {
-    const feedbackInsight = `[USER_FEEDBACK_${type.toUpperCase()}] User gave a thumbs ${type} on message: "${content.substring(0, 150)}...". ${
-      type === 'up' 
-        ? "This style was incredibly warm, highly engaging, empathetic, and humored. Keep using this human tone!" 
-        : "This style was suboptimal (possibly too robotic, stiff, or cold). Soften the tone, be more supportive and direct."
-    }`;
+    const hasCode = content.includes('```');
+    const hasDiagram = content.includes('mermaid');
+    const hasBullets = content.includes('•');
+    const length = content.length;
+    
+    const feedbackInsight = `[PREFERENCE_SIGNAL] Thumbs ${type.toUpperCase()} | Code in response: ${hasCode} | Diagram: ${hasDiagram} | Bullets: ${hasBullets} | Length: ${length} | Sample: "${content.substring(0, 100)}"
+    → ${type === 'up' ? 
+      'REINFORCE this exact style, format, and length. User LOVES this approach.' : 
+      'AVOID this style. User DISLIKES this approach. Try different format, tone, or length next time.'}`;
+    
     this.trainingContext.push(feedbackInsight);
-    if (this.trainingContext.length > 20) this.trainingContext.shift();
+    if (this.trainingContext.length > 25) this.trainingContext.shift();
     console.log(`[OmniBrain] Registered feedback training insight for message: ${msgId}`);
   }
 
@@ -633,15 +720,27 @@ export class OmniBrain {
 
   private getPlatformName(modelId: string): string {
     const platforms: Record<string, string> = {
-      "omni-google": "Google AI",
+      "omni-google": "Google AI Studio",
       "omni-anthropic": "Anthropic",
       "omni-openai": "OpenAI",
       "omni-groq": "Groq",
       "omni-openrouter": "OpenRouter",
       "omni-huggingface": "Hugging Face",
-      "omni-mistral": "Mistral"
+      "omni-mistral": "Mistral",
+      "google": "Google AI Studio",
+      "groq": "Groq",
+      "openrouter": "OpenRouter",
+      "deepseek": "DeepSeek",
+      "mistral": "Mistral",
+      "huggingface": "Hugging Face",
+      "cerebras": "Cerebras",
+      "github": "GitHub Models",
+      "cloudflare": "Cloudflare Workers AI",
+      "together": "Together AI",
+      "fireworks": "Fireworks AI",
+      "nvidia": "NVIDIA Build"
     };
-    return platforms[modelId] || "Google AI";
+    return platforms[modelId] || "Google AI Studio";
   }
 }
 
